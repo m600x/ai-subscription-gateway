@@ -45,20 +45,26 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, cfg *config.Config) 
 	if model == "" {
 		model = cfg.DefaultModel
 	}
+	base, variant := splitModelVariant(model)
 
 	out := anthropic.MessagesRequest{
-		Model:     model,
-		MaxTokens: maxTokens,
-		System:    system,
-		Messages:  msgs,
-		Stream:    req.Stream,
+		Model:    base,
+		System:   system,
+		Messages: msgs,
+		Stream:   req.Stream,
 	}
 
-	if cfg.MaxThinkingTokens > 0 {
-		out.Thinking = &anthropic.Thinking{Type: "enabled", BudgetTokens: cfg.MaxThinkingTokens}
+	// A "-max" variant lifts the output ceiling regardless of thinking.
+	if variant == "max" && maxTokens < cfg.MaxOutputTokens {
+		maxTokens = cfg.MaxOutputTokens
+	}
+	out.MaxTokens = maxTokens
+
+	if budget := resolveThinkingBudget(base, variant, req.ReasoningEffort, cfg); budget > 0 {
+		out.Thinking = &anthropic.Thinking{Type: "enabled", BudgetTokens: budget}
 		// max_tokens must exceed the thinking budget.
-		if out.MaxTokens <= cfg.MaxThinkingTokens {
-			out.MaxTokens = cfg.MaxThinkingTokens + cfg.DefaultMaxTokens
+		if out.MaxTokens <= budget {
+			out.MaxTokens = budget + cfg.DefaultMaxTokens
 		}
 		// temperature/top_p are incompatible with extended thinking -> leave unset.
 	} else {
@@ -71,6 +77,61 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, cfg *config.Config) 
 	}
 
 	return out
+}
+
+// splitModelVariant strips a "-thinking" / "-max" suffix, returning the base
+// model id and the variant ("thinking", "max", or "").
+func splitModelVariant(model string) (base, variant string) {
+	switch {
+	case strings.HasSuffix(model, "-max"):
+		return strings.TrimSuffix(model, "-max"), "max"
+	case strings.HasSuffix(model, "-thinking"):
+		return strings.TrimSuffix(model, "-thinking"), "thinking"
+	default:
+		return model, ""
+	}
+}
+
+// budgetForEffort maps an OpenAI reasoning_effort value to a thinking budget.
+// Returns -1 when unspecified/unrecognized (caller falls back to a variant or
+// global default) and 0 for an explicit "off".
+func budgetForEffort(effort string, cfg *config.Config) int {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "":
+		return -1
+	case "minimal", "none", "off":
+		return 0
+	case "low":
+		return cfg.ThinkingBudgetLow
+	case "medium":
+		return cfg.ThinkingBudgetMed
+	case "high", "max":
+		return cfg.ThinkingBudgetHigh
+	default:
+		return -1
+	}
+}
+
+// resolveThinkingBudget decides the extended-thinking budget for a request.
+// Precedence: an explicit reasoning_effort always wins; otherwise the model
+// variant sets a default (-max -> high, -thinking -> medium); a plain model
+// falls back to the global MaxThinkingTokens default. Models that can't take an
+// explicit budget (e.g. Fable's silent thinking) always resolve to 0.
+func resolveThinkingBudget(base, variant, effort string, cfg *config.Config) int {
+	if !cfg.IsThinkingModel(base) {
+		return 0
+	}
+	if eb := budgetForEffort(effort, cfg); eb >= 0 {
+		return eb
+	}
+	switch variant {
+	case "max":
+		return cfg.ThinkingBudgetHigh
+	case "thinking":
+		return cfg.ThinkingBudgetMed
+	default:
+		return cfg.MaxThinkingTokens
+	}
 }
 
 // coalesce merges consecutive same-role messages (Anthropic requires

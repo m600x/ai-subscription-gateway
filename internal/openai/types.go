@@ -52,6 +52,10 @@ type ChatCompletionRequest struct {
 	MaxCompletionTokens *int          `json:"max_completion_tokens"`
 	Temperature         *float64      `json:"temperature"`
 	TopP                *float64      `json:"top_p"`
+	// ReasoningEffort is OpenAI's low|medium|high (also minimal). Open WebUI
+	// sends it as an advanced per-model param; the wrapper maps it to an
+	// Anthropic thinking budget for thinking-capable models.
+	ReasoningEffort string `json:"reasoning_effort"`
 }
 
 // RespMessage is the assistant message in a non-streaming completion.

@@ -9,9 +9,14 @@ import (
 
 func testCfg() *config.Config {
 	return &config.Config{
-		SpoofSystemPrompt: "You are Claude Code, Anthropic's official CLI for Claude.",
-		DefaultModel:      "claude-sonnet-5",
-		DefaultMaxTokens:  8192,
+		SpoofSystemPrompt:  "You are Claude Code, Anthropic's official CLI for Claude.",
+		DefaultModel:       "claude-sonnet-5",
+		DefaultMaxTokens:   8192,
+		ThinkingModels:     []string{"claude-opus-4-8", "claude-sonnet-5"},
+		ThinkingBudgetLow:  2048,
+		ThinkingBudgetMed:  8192,
+		ThinkingBudgetHigh: 16384,
+		MaxOutputTokens:    32000,
 	}
 }
 
@@ -71,6 +76,104 @@ func TestClientMaxTokensHonored(t *testing.T) {
 	mr := BuildMessagesRequest(req, cfg)
 	if mr.MaxTokens != 100 {
 		t.Errorf("client max_tokens not honored; got %d", mr.MaxTokens)
+	}
+}
+
+func TestThinkingVariantSetsBudgetAndDropsSampling(t *testing.T) {
+	cfg := testCfg()
+	temp := 0.7
+	req := openai.ChatCompletionRequest{
+		Model:       "claude-sonnet-5-thinking",
+		Temperature: &temp,
+		Messages:    []openai.ChatMessage{{Role: "user", Content: "hi"}},
+	}
+	mr := BuildMessagesRequest(req, cfg)
+
+	if mr.Model != "claude-sonnet-5" {
+		t.Errorf("variant suffix not stripped for upstream; got %q", mr.Model)
+	}
+	if mr.Thinking == nil || mr.Thinking.BudgetTokens != cfg.ThinkingBudgetMed {
+		t.Errorf("thinking budget = %+v, want %d", mr.Thinking, cfg.ThinkingBudgetMed)
+	}
+	if mr.Temperature != nil {
+		t.Error("temperature must be dropped when extended thinking is enabled")
+	}
+	if mr.MaxTokens <= mr.Thinking.BudgetTokens {
+		t.Errorf("max_tokens (%d) must exceed thinking budget (%d)", mr.MaxTokens, mr.Thinking.BudgetTokens)
+	}
+}
+
+func TestMaxVariantLiftsOutputAndThinksHigh(t *testing.T) {
+	cfg := testCfg()
+	req := openai.ChatCompletionRequest{
+		Model:    "claude-sonnet-5-max",
+		Messages: []openai.ChatMessage{{Role: "user", Content: "hi"}},
+	}
+	mr := BuildMessagesRequest(req, cfg)
+
+	if mr.Model != "claude-sonnet-5" {
+		t.Errorf("upstream model = %q, want base", mr.Model)
+	}
+	if mr.Thinking == nil || mr.Thinking.BudgetTokens != cfg.ThinkingBudgetHigh {
+		t.Errorf("max variant should think high; got %+v", mr.Thinking)
+	}
+	if mr.MaxTokens < cfg.MaxOutputTokens {
+		t.Errorf("max variant should lift max_tokens to >= %d; got %d", cfg.MaxOutputTokens, mr.MaxTokens)
+	}
+}
+
+func TestReasoningEffortOverridesVariant(t *testing.T) {
+	cfg := testCfg()
+	req := openai.ChatCompletionRequest{
+		Model:           "claude-sonnet-5-thinking",
+		ReasoningEffort: "low",
+		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+	}
+	mr := BuildMessagesRequest(req, cfg)
+	if mr.Thinking == nil || mr.Thinking.BudgetTokens != cfg.ThinkingBudgetLow {
+		t.Errorf("explicit reasoning_effort should win; got %+v", mr.Thinking)
+	}
+}
+
+func TestReasoningEffortOnPlainThinkingModel(t *testing.T) {
+	cfg := testCfg()
+	req := openai.ChatCompletionRequest{
+		Model:           "claude-sonnet-5",
+		ReasoningEffort: "high",
+		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+	}
+	mr := BuildMessagesRequest(req, cfg)
+	if mr.Thinking == nil || mr.Thinking.BudgetTokens != cfg.ThinkingBudgetHigh {
+		t.Errorf("reasoning_effort must apply to a plain thinking-capable model; got %+v", mr.Thinking)
+	}
+}
+
+func TestNonThinkingModelIgnoresThinkingSignals(t *testing.T) {
+	cfg := testCfg()
+	req := openai.ChatCompletionRequest{
+		Model:           "claude-fable-5-thinking",
+		ReasoningEffort: "high",
+		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+	}
+	mr := BuildMessagesRequest(req, cfg)
+	if mr.Model != "claude-fable-5" {
+		t.Errorf("suffix should still be stripped; got %q", mr.Model)
+	}
+	if mr.Thinking != nil {
+		t.Errorf("fable is not thinking-capable; thinking must stay unset, got %+v", mr.Thinking)
+	}
+}
+
+func TestMinimalEffortDisablesThinking(t *testing.T) {
+	cfg := testCfg()
+	req := openai.ChatCompletionRequest{
+		Model:           "claude-sonnet-5-thinking",
+		ReasoningEffort: "minimal",
+		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+	}
+	mr := BuildMessagesRequest(req, cfg)
+	if mr.Thinking != nil {
+		t.Errorf("minimal effort should disable thinking even on a -thinking alias; got %+v", mr.Thinking)
 	}
 }
 

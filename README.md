@@ -39,6 +39,20 @@ Open WebUI ──OpenAI /v1/chat/completions──▶ wrapper ──Bearer + spo
 
 Clients must send `Authorization: Bearer <CLIENT_API_KEY>` (except `/health`).
 
+## Reasoning controls (thinking, effort, max)
+
+Anthropic exposes reasoning as a single `thinking.budget_tokens` value; there is no "effort" or "max" concept upstream. Since Open WebUI's OpenAI-connection UI has no thinking/max toggle, the wrapper surfaces reasoning two ways:
+
+1. **Model aliases** in `/v1/models`, so the model dropdown becomes the control. For each model in `THINKING_MODELS` you get three ids:
+   - `claude-sonnet-5` — no extended thinking (fast; the default)
+   - `claude-sonnet-5-thinking` — extended thinking at the *medium* budget
+   - `claude-sonnet-5-max` — thinking at the *high* budget **and** `max_tokens` lifted to `MAX_OUTPUT_TOKENS`
+2. **`reasoning_effort`** (`low|medium|high`, also `minimal`) — if the client sends it (Open WebUI's per-model advanced param), it maps to a budget and **overrides** the alias default. `minimal` disables thinking even on a `-thinking`/`-max` alias.
+
+Models **not** in `THINKING_MODELS` (e.g. Fable, whose thinking is silent server-side) are advertised as-is and ignore these signals.
+
+> ⚠️ On the subscription OAuth path, extended thinking is **not streamed as readable deltas** — you get the quality benefit but no visible reasoning panel, plus significant added latency. Keep the plain model for everyday chat; reach for `-thinking`/`-max` on genuinely hard problems.
+
 ## Configuration
 
 | Env | Default | Purpose |
@@ -55,7 +69,10 @@ Clients must send `Authorization: Bearer <CLIENT_API_KEY>` (except `/health`).
 | `DEFAULT_MODEL` | `claude-sonnet-5` | used when a request omits the model |
 | `DEFAULT_MAX_TOKENS` | `8192` | injected when the client omits `max_tokens` |
 | `ENABLE_WEB_SEARCH` | `false` | add Anthropic's server-side `web_search` tool to every request |
-| `MAX_THINKING_TOKENS` | `0` | if >0, enable extended thinking with this budget |
+| `MAX_THINKING_TOKENS` | `0` | default thinking budget for **plain** (un-suffixed) model ids; `0` = off |
+| `THINKING_MODELS` | `claude-opus-4-8,claude-sonnet-5` | base models that accept an explicit thinking budget (get `-thinking`/`-max` aliases and honor `reasoning_effort`) |
+| `THINKING_BUDGET_LOW` / `_MEDIUM` / `_HIGH` | `2048` / `8192` / `16384` | `reasoning_effort` → thinking budget mapping |
+| `MAX_OUTPUT_TOKENS` | `32000` | output-token ceiling for a `-max` model variant |
 | `REQUEST_TIMEOUT_SECONDS` | `600` | upstream request timeout |
 | `MAX_RETRIES` | `2` | retries on 429 / 5xx with backoff |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
@@ -132,7 +149,7 @@ make run       # run natively with `go run` (needs .env)
 Push a multi-arch image with `make build PUSH=--push`. Override defaults via
 `IMAGE`, `TAG`, `PORT`, `CONTAINER`, `PLATFORMS`.
 
-CI (`.github/workflows/ci.yml`) runs gofmt check, `go vet`, build, and tests. The image is built and pushed to GHCR by `.github/workflows/publish.yml` on every push to `main`.
+CI (`.github/workflows/ci.yml`) runs a single sequential pipeline — **lint → tests → build → push** — with a per-job summary. On pushes to `main` the built multi-arch image is published to GHCR; pull requests run everything except the push.
 
 ## Limitations
 
