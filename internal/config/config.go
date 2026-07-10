@@ -24,19 +24,23 @@ type Config struct {
 	DefaultModel      string
 	DefaultMaxTokens  int
 	EnableWebSearch   bool
-	MaxThinkingTokens int
-	// ThinkingModels are the base models that accept an explicit thinking
-	// budget. They get a "-thinking" alias in /v1/models (OpenRouter-style
-	// variant id) and honor reasoning_effort. Models not listed here (e.g.
-	// Fable, whose thinking is always silent server-side) are advertised
-	// as-is.
-	ThinkingModels     []string
-	ThinkingBudgetLow  int
-	ThinkingBudgetMed  int
-	ThinkingBudgetHigh int
-	RequestTimeout     time.Duration
-	MaxRetries         int
-	LogLevel           string
+	// ThinkingModels accept adaptive thinking guided by the effort ladder
+	// (low|medium|high|xhigh|max). They get a "-thinking" alias in
+	// /v1/models (OpenRouter-style variant id) and honor reasoning_effort.
+	ThinkingModels []string
+	// ThinkingAlwaysOnModels cannot disable thinking (thinking.type
+	// "disabled" is rejected); an "off" effort is silently ignored.
+	ThinkingAlwaysOnModels []string
+	// ThinkingDefaultOnModels think adaptively even when no thinking config
+	// is sent; "off" must send thinking.type "disabled" to actually disable.
+	ThinkingDefaultOnModels []string
+	// ThinkingDisplay is the thinking.display mode. "summarized" streams
+	// readable thinking_delta events (surfaced as reasoning_content);
+	// "omitted" returns empty thinking blocks.
+	ThinkingDisplay string
+	RequestTimeout  time.Duration
+	MaxRetries      int
+	LogLevel        string
 }
 
 // Load reads configuration from environment variables and validates it.
@@ -54,15 +58,16 @@ func Load() (*Config, error) {
 		DefaultModel:      envStr("DEFAULT_MODEL", "claude-sonnet-5"),
 		DefaultMaxTokens:  envInt("DEFAULT_MAX_TOKENS", 8192),
 		EnableWebSearch:   envBool("ENABLE_WEB_SEARCH", false),
-		MaxThinkingTokens: envInt("MAX_THINKING_TOKENS", 0),
 		ThinkingModels: envList("THINKING_MODELS",
-			[]string{"claude-opus-4-8", "claude-sonnet-5"}),
-		ThinkingBudgetLow:  envInt("THINKING_BUDGET_LOW", 2048),
-		ThinkingBudgetMed:  envInt("THINKING_BUDGET_MEDIUM", 8192),
-		ThinkingBudgetHigh: envInt("THINKING_BUDGET_HIGH", 16384),
-		RequestTimeout:     time.Duration(envInt("REQUEST_TIMEOUT_SECONDS", 600)) * time.Second,
-		MaxRetries:         envInt("MAX_RETRIES", 2),
-		LogLevel:           envStr("LOG_LEVEL", "info"),
+			[]string{"claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"}),
+		ThinkingAlwaysOnModels: envList("THINKING_ALWAYS_ON_MODELS",
+			[]string{"claude-fable-5"}),
+		ThinkingDefaultOnModels: envList("THINKING_DEFAULT_ON_MODELS",
+			[]string{"claude-sonnet-5"}),
+		ThinkingDisplay: envStr("THINKING_DISPLAY", "summarized"),
+		RequestTimeout:  time.Duration(envInt("REQUEST_TIMEOUT_SECONDS", 600)) * time.Second,
+		MaxRetries:      envInt("MAX_RETRIES", 2),
+		LogLevel:        envStr("LOG_LEVEL", "info"),
 	}
 
 	if c.ClientAPIKey == "" {
@@ -83,15 +88,30 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
-// IsThinkingModel reports whether the base model accepts an explicit thinking
-// budget (and therefore gets a -thinking alias and honors reasoning_effort).
-func (c *Config) IsThinkingModel(model string) bool {
-	for _, m := range c.ThinkingModels {
-		if m == model {
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
 			return true
 		}
 	}
 	return false
+}
+
+// IsThinkingModel reports whether the base model supports adaptive thinking
+// (and therefore gets a -thinking alias and honors reasoning_effort).
+func (c *Config) IsThinkingModel(model string) bool {
+	return contains(c.ThinkingModels, model)
+}
+
+// IsThinkingAlwaysOn reports whether thinking cannot be disabled on the model.
+func (c *Config) IsThinkingAlwaysOn(model string) bool {
+	return contains(c.ThinkingAlwaysOnModels, model)
+}
+
+// IsThinkingDefaultOn reports whether the model thinks even without a
+// thinking config (so "off" must send an explicit disable).
+func (c *Config) IsThinkingDefaultOn(model string) bool {
+	return contains(c.ThinkingDefaultOnModels, model)
 }
 
 // AdvertisedModels returns the /v1/models list: every configured model, plus

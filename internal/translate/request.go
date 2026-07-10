@@ -55,14 +55,31 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, cfg *config.Config) 
 		Stream:    req.Stream,
 	}
 
-	if budget := resolveThinkingBudget(base, variant, req.ReasoningEffort, cfg); budget > 0 {
-		out.Thinking = &anthropic.Thinking{Type: "enabled", BudgetTokens: budget}
-		// max_tokens must exceed the thinking budget.
-		if out.MaxTokens <= budget {
-			out.MaxTokens = budget + cfg.DefaultMaxTokens
+	thinking := false
+	switch effort := resolveEffort(base, variant, req.ReasoningEffort, cfg); effort {
+	case "":
+		// Default: no thinking config. Default-on models (Sonnet 5) and
+		// always-on models (Fable 5) still think adaptively at their own
+		// default effort; the rest stay fast.
+	case "off":
+		// Always-on models reject an explicit disable -- omit the config
+		// and let the model do its (unavoidable) silent thinking.
+		if !cfg.IsThinkingAlwaysOn(base) && cfg.IsThinkingDefaultOn(base) {
+			out.Thinking = &anthropic.Thinking{Type: "disabled"}
 		}
-		// temperature/top_p are incompatible with extended thinking -> leave unset.
-	} else {
+	default:
+		thinking = true
+		out.Thinking = &anthropic.Thinking{Type: "adaptive", Display: cfg.ThinkingDisplay}
+		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
+		// max_tokens caps thinking + response combined; leave headroom so
+		// high-effort thinking cannot starve the visible answer.
+		if out.MaxTokens < 4*cfg.DefaultMaxTokens {
+			out.MaxTokens = 4 * cfg.DefaultMaxTokens
+		}
+	}
+
+	// temperature/top_p are incompatible with active thinking.
+	if !thinking {
 		out.Temperature = req.Temperature
 		out.TopP = req.TopP
 	}
@@ -83,42 +100,37 @@ func splitModelVariant(model string) (base, variant string) {
 	return model, ""
 }
 
-// budgetForEffort maps an OpenAI reasoning_effort value to a thinking budget.
-// Returns -1 when unspecified/unrecognized (caller falls back to a variant or
-// global default) and 0 for an explicit "off".
-func budgetForEffort(effort string, cfg *config.Config) int {
-	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case "":
-		return -1
+// normalizeEffort maps a reasoning_effort value onto the Anthropic effort
+// ladder (low|medium|high|xhigh|max), "off" for an explicit disable, or ""
+// when unspecified/unrecognized.
+func normalizeEffort(effort string) string {
+	switch e := strings.ToLower(strings.TrimSpace(effort)); e {
 	case "minimal", "none", "off":
-		return 0
-	case "low":
-		return cfg.ThinkingBudgetLow
-	case "medium":
-		return cfg.ThinkingBudgetMed
-	case "high":
-		return cfg.ThinkingBudgetHigh
+		return "off"
+	case "low", "medium", "high", "xhigh", "max":
+		return e
+	case "extra-high", "extra_high", "xtra-high":
+		return "xhigh"
 	default:
-		return -1
+		return ""
 	}
 }
 
-// resolveThinkingBudget decides the extended-thinking budget for a request.
-// Precedence: an explicit reasoning_effort always wins; otherwise a -thinking
-// variant defaults to the medium budget; a plain model falls back to the
-// global MaxThinkingTokens default. Models that can't take an explicit budget
-// (e.g. Fable's silent thinking) always resolve to 0.
-func resolveThinkingBudget(base, variant, effort string, cfg *config.Config) int {
+// resolveEffort decides the effort for a request. Precedence: an explicit
+// reasoning_effort always wins; otherwise a -thinking variant enables
+// adaptive thinking at the API default effort (high). Non-thinking models
+// always resolve to "" (no thinking config sent).
+func resolveEffort(base, variant, effort string, cfg *config.Config) string {
 	if !cfg.IsThinkingModel(base) {
-		return 0
+		return ""
 	}
-	if eb := budgetForEffort(effort, cfg); eb >= 0 {
-		return eb
+	if e := normalizeEffort(effort); e != "" {
+		return e
 	}
 	if variant == "thinking" {
-		return cfg.ThinkingBudgetMed
+		return "high"
 	}
-	return cfg.MaxThinkingTokens
+	return ""
 }
 
 // coalesce merges consecutive same-role messages (Anthropic requires

@@ -16,10 +16,17 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-// Thinking enables extended thinking with a token budget.
+// Thinking configures thinking mode. Current models use adaptive thinking
+// ({type: "adaptive"}) guided by OutputConfig.Effort; display "summarized"
+// makes thinking text stream as readable thinking_delta events.
 type Thinking struct {
-	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens"`
+	Type    string `json:"type"`
+	Display string `json:"display,omitempty"`
+}
+
+// OutputConfig carries the effort parameter (low|medium|high|xhigh|max).
+type OutputConfig struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 // Tool declares a server-side tool (e.g. web_search).
@@ -30,15 +37,16 @@ type Tool struct {
 
 // MessagesRequest is the POST /v1/messages body.
 type MessagesRequest struct {
-	Model       string        `json:"model"`
-	MaxTokens   int           `json:"max_tokens"`
-	System      []SystemBlock `json:"system,omitempty"`
-	Messages    []Message     `json:"messages"`
-	Stream      bool          `json:"stream,omitempty"`
-	Thinking    *Thinking     `json:"thinking,omitempty"`
-	Tools       []Tool        `json:"tools,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	TopP        *float64      `json:"top_p,omitempty"`
+	Model        string        `json:"model"`
+	MaxTokens    int           `json:"max_tokens"`
+	System       []SystemBlock `json:"system,omitempty"`
+	Messages     []Message     `json:"messages"`
+	Stream       bool          `json:"stream,omitempty"`
+	Thinking     *Thinking     `json:"thinking,omitempty"`
+	OutputConfig *OutputConfig `json:"output_config,omitempty"`
+	Tools        []Tool        `json:"tools,omitempty"`
+	Temperature  *float64      `json:"temperature,omitempty"`
+	TopP         *float64      `json:"top_p,omitempty"`
 }
 
 // Usage reports token counts.

@@ -39,18 +39,24 @@ Open WebUI ──OpenAI /v1/chat/completions──▶ wrapper ──Bearer + spo
 
 Clients must send `Authorization: Bearer <CLIENT_API_KEY>` (except `/health`).
 
-## Reasoning controls (thinking, effort)
+## Reasoning controls (adaptive thinking + the effort ladder)
 
-Anthropic exposes reasoning as a single `thinking.budget_tokens` value; there is no "effort" concept upstream. The wrapper surfaces reasoning through the two OpenAI-ecosystem conventions:
+Current Claude models use **adaptive thinking** (`thinking: {type: "adaptive"}`) guided by the **effort parameter** (`output_config.effort`), with five levels: `low | medium | high (default) | xhigh | max`. Manual `budget_tokens` is rejected on Opus 4.8 / Sonnet 5 / Fable 5. The wrapper maps the OpenAI-side `reasoning_effort` straight onto that ladder:
 
-1. **`reasoning_effort`** (`low|medium|high`, also `minimal`) — the OpenAI-standard parameter. If the client sends it (Open WebUI's per-model/per-chat advanced param), it maps to a thinking budget and **overrides** any alias default. `minimal` disables thinking even on a `-thinking` alias.
-2. **`-thinking` model aliases** in `/v1/models` (the OpenRouter/Gemini-style variant-id convention, e.g. `deepseek-r1:thinking`, `gemini-2.5-flash-preview:thinking`), so the model dropdown works as a thinking toggle in clients that can't send `reasoning_effort` per message. For each model in `THINKING_MODELS`:
-   - `claude-sonnet-5` — no extended thinking (fast; the default)
-   - `claude-sonnet-5-thinking` — extended thinking at the *medium* budget
+1. **`reasoning_effort`** — `low|medium|high|xhigh|max` pass through as `output_config.effort` with `thinking: adaptive`; `off` (also `minimal`/`none`) disables thinking where the model allows it. Overrides any alias default.
+2. **`-thinking` model aliases** in `/v1/models` (OpenRouter/Gemini-style variant ids) for clients that can't send `reasoning_effort`: the alias enables adaptive thinking at the default `high` effort.
 
-Models **not** in `THINKING_MODELS` (e.g. Fable, whose thinking is silent server-side) are advertised as-is and ignore these signals.
+Per-model semantics (configurable):
 
-> ⚠️ On the subscription OAuth path, extended thinking is **not streamed as readable deltas** — you get the quality benefit but no visible reasoning panel, plus significant added latency. Keep the plain model for everyday chat; reach for `-thinking` (or a `reasoning_effort`) on genuinely hard problems.
+| Model | Behavior |
+| ----- | -------- |
+| Fable 5 | thinking **always on** (adaptive); `off` is ignored (API rejects disable) |
+| Sonnet 5 | thinks **by default**; `off` sends an explicit `thinking: disabled` |
+| Opus 4.8 | off unless an effort is requested |
+
+`thinking.display` defaults to `summarized`, so thinking streams as readable `thinking_delta` events → surfaced as `reasoning_content` (collapsible reasoning section in Open WebUI).
+
+> Note: the legacy `thinking: {type: "enabled", budget_tokens: N}` mode streamed no readable thinking on this auth path. Adaptive thinking with `display: summarized` **does** stream readable summaries (verified live). Higher effort still costs latency — keep `low`/default for everyday chat and reach for `xhigh`/`max` on genuinely hard problems.
 
 ## Configuration
 
@@ -68,9 +74,10 @@ Models **not** in `THINKING_MODELS` (e.g. Fable, whose thinking is silent server
 | `DEFAULT_MODEL` | `claude-sonnet-5` | used when a request omits the model |
 | `DEFAULT_MAX_TOKENS` | `8192` | injected when the client omits `max_tokens` |
 | `ENABLE_WEB_SEARCH` | `false` | add Anthropic's server-side `web_search` tool to every request |
-| `MAX_THINKING_TOKENS` | `0` | default thinking budget for **plain** (un-suffixed) model ids; `0` = off |
-| `THINKING_MODELS` | `claude-opus-4-8,claude-sonnet-5` | base models that accept an explicit thinking budget (get a `-thinking` alias and honor `reasoning_effort`) |
-| `THINKING_BUDGET_LOW` / `_MEDIUM` / `_HIGH` | `2048` / `8192` / `16384` | `reasoning_effort` → thinking budget mapping |
+| `THINKING_MODELS` | `claude-fable-5,claude-opus-4-8,claude-sonnet-5` | models supporting adaptive thinking (get a `-thinking` alias and honor `reasoning_effort`) |
+| `THINKING_ALWAYS_ON_MODELS` | `claude-fable-5` | models that reject disabling thinking (`off` ignored) |
+| `THINKING_DEFAULT_ON_MODELS` | `claude-sonnet-5` | models that think unless explicitly disabled |
+| `THINKING_DISPLAY` | `summarized` | `thinking.display`: `summarized` streams readable thinking, `omitted` hides it |
 | `REQUEST_TIMEOUT_SECONDS` | `600` | upstream request timeout |
 | `MAX_RETRIES` | `2` | retries on 429 / 5xx with backoff |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |

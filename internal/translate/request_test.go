@@ -9,13 +9,13 @@ import (
 
 func testCfg() *config.Config {
 	return &config.Config{
-		SpoofSystemPrompt:  "You are Claude Code, Anthropic's official CLI for Claude.",
-		DefaultModel:       "claude-sonnet-5",
-		DefaultMaxTokens:   8192,
-		ThinkingModels:     []string{"claude-opus-4-8", "claude-sonnet-5"},
-		ThinkingBudgetLow:  2048,
-		ThinkingBudgetMed:  8192,
-		ThinkingBudgetHigh: 16384,
+		SpoofSystemPrompt:       "You are Claude Code, Anthropic's official CLI for Claude.",
+		DefaultModel:            "claude-sonnet-5",
+		DefaultMaxTokens:        8192,
+		ThinkingModels:          []string{"claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"},
+		ThinkingAlwaysOnModels:  []string{"claude-fable-5"},
+		ThinkingDefaultOnModels: []string{"claude-sonnet-5"},
+		ThinkingDisplay:         "summarized",
 	}
 }
 
@@ -78,7 +78,7 @@ func TestClientMaxTokensHonored(t *testing.T) {
 	}
 }
 
-func TestThinkingVariantSetsBudgetAndDropsSampling(t *testing.T) {
+func TestThinkingVariantEnablesAdaptiveAndDropsSampling(t *testing.T) {
 	cfg := testCfg()
 	temp := 0.7
 	req := openai.ChatCompletionRequest{
@@ -91,14 +91,35 @@ func TestThinkingVariantSetsBudgetAndDropsSampling(t *testing.T) {
 	if mr.Model != "claude-sonnet-5" {
 		t.Errorf("variant suffix not stripped for upstream; got %q", mr.Model)
 	}
-	if mr.Thinking == nil || mr.Thinking.BudgetTokens != cfg.ThinkingBudgetMed {
-		t.Errorf("thinking budget = %+v, want %d", mr.Thinking, cfg.ThinkingBudgetMed)
+	if mr.Thinking == nil || mr.Thinking.Type != "adaptive" || mr.Thinking.Display != "summarized" {
+		t.Errorf("want adaptive thinking with summarized display; got %+v", mr.Thinking)
+	}
+	if mr.OutputConfig == nil || mr.OutputConfig.Effort != "high" {
+		t.Errorf("-thinking variant should default to high effort; got %+v", mr.OutputConfig)
 	}
 	if mr.Temperature != nil {
-		t.Error("temperature must be dropped when extended thinking is enabled")
+		t.Error("temperature must be dropped when thinking is active")
 	}
-	if mr.MaxTokens <= mr.Thinking.BudgetTokens {
-		t.Errorf("max_tokens (%d) must exceed thinking budget (%d)", mr.MaxTokens, mr.Thinking.BudgetTokens)
+	if mr.MaxTokens < 4*cfg.DefaultMaxTokens {
+		t.Errorf("max_tokens (%d) should leave headroom for thinking", mr.MaxTokens)
+	}
+}
+
+func TestEffortLadderPassesThrough(t *testing.T) {
+	cfg := testCfg()
+	for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
+		req := openai.ChatCompletionRequest{
+			Model:           "claude-opus-4-8",
+			ReasoningEffort: effort,
+			Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+		}
+		mr := BuildMessagesRequest(req, cfg)
+		if mr.Thinking == nil || mr.Thinking.Type != "adaptive" {
+			t.Errorf("effort %q: want adaptive thinking; got %+v", effort, mr.Thinking)
+		}
+		if mr.OutputConfig == nil || mr.OutputConfig.Effort != effort {
+			t.Errorf("effort %q not passed through; got %+v", effort, mr.OutputConfig)
+		}
 	}
 }
 
@@ -106,54 +127,57 @@ func TestReasoningEffortOverridesVariant(t *testing.T) {
 	cfg := testCfg()
 	req := openai.ChatCompletionRequest{
 		Model:           "claude-sonnet-5-thinking",
-		ReasoningEffort: "low",
+		ReasoningEffort: "xhigh",
 		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
 	}
 	mr := BuildMessagesRequest(req, cfg)
-	if mr.Thinking == nil || mr.Thinking.BudgetTokens != cfg.ThinkingBudgetLow {
-		t.Errorf("explicit reasoning_effort should win; got %+v", mr.Thinking)
+	if mr.OutputConfig == nil || mr.OutputConfig.Effort != "xhigh" {
+		t.Errorf("explicit reasoning_effort should win; got %+v", mr.OutputConfig)
 	}
 }
 
-func TestReasoningEffortOnPlainThinkingModel(t *testing.T) {
+func TestOffDisablesThinkingOnDefaultOnModel(t *testing.T) {
 	cfg := testCfg()
 	req := openai.ChatCompletionRequest{
 		Model:           "claude-sonnet-5",
-		ReasoningEffort: "high",
+		ReasoningEffort: "off",
 		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
 	}
 	mr := BuildMessagesRequest(req, cfg)
-	if mr.Thinking == nil || mr.Thinking.BudgetTokens != cfg.ThinkingBudgetHigh {
-		t.Errorf("reasoning_effort must apply to a plain thinking-capable model; got %+v", mr.Thinking)
+	// Sonnet 5 thinks by default -> "off" must send an explicit disable.
+	if mr.Thinking == nil || mr.Thinking.Type != "disabled" {
+		t.Errorf("off on a default-on model should send thinking disabled; got %+v", mr.Thinking)
+	}
+	if mr.OutputConfig != nil {
+		t.Errorf("off must not send an effort; got %+v", mr.OutputConfig)
 	}
 }
 
-func TestNonThinkingModelIgnoresThinkingSignals(t *testing.T) {
+func TestOffIgnoredOnAlwaysOnModel(t *testing.T) {
 	cfg := testCfg()
 	req := openai.ChatCompletionRequest{
-		Model:           "claude-fable-5-thinking",
-		ReasoningEffort: "high",
+		Model:           "claude-fable-5",
+		ReasoningEffort: "off",
 		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
 	}
 	mr := BuildMessagesRequest(req, cfg)
-	if mr.Model != "claude-fable-5" {
-		t.Errorf("suffix should still be stripped; got %q", mr.Model)
-	}
+	// Fable rejects thinking.type=disabled -> send nothing.
 	if mr.Thinking != nil {
-		t.Errorf("fable is not thinking-capable; thinking must stay unset, got %+v", mr.Thinking)
+		t.Errorf("off on an always-on model must omit the thinking config; got %+v", mr.Thinking)
 	}
 }
 
-func TestMinimalEffortDisablesThinking(t *testing.T) {
+func TestOffOnRegularModelSendsNothing(t *testing.T) {
 	cfg := testCfg()
 	req := openai.ChatCompletionRequest{
-		Model:           "claude-sonnet-5-thinking",
-		ReasoningEffort: "minimal",
+		Model:           "claude-opus-4-8",
+		ReasoningEffort: "off",
 		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
 	}
 	mr := BuildMessagesRequest(req, cfg)
-	if mr.Thinking != nil {
-		t.Errorf("minimal effort should disable thinking even on a -thinking alias; got %+v", mr.Thinking)
+	// Opus doesn't think unless asked -> no config needed to stay off.
+	if mr.Thinking != nil || mr.OutputConfig != nil {
+		t.Errorf("off on an off-by-default model should send nothing; got %+v %+v", mr.Thinking, mr.OutputConfig)
 	}
 }
 
