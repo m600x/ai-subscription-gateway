@@ -16,7 +16,6 @@ func testCfg() *config.Config {
 		ThinkingBudgetLow:  2048,
 		ThinkingBudgetMed:  8192,
 		ThinkingBudgetHigh: 16384,
-		MaxOutputTokens:    32000,
 	}
 }
 
@@ -100,25 +99,6 @@ func TestThinkingVariantSetsBudgetAndDropsSampling(t *testing.T) {
 	}
 	if mr.MaxTokens <= mr.Thinking.BudgetTokens {
 		t.Errorf("max_tokens (%d) must exceed thinking budget (%d)", mr.MaxTokens, mr.Thinking.BudgetTokens)
-	}
-}
-
-func TestMaxVariantLiftsOutputAndThinksHigh(t *testing.T) {
-	cfg := testCfg()
-	req := openai.ChatCompletionRequest{
-		Model:    "claude-sonnet-5-max",
-		Messages: []openai.ChatMessage{{Role: "user", Content: "hi"}},
-	}
-	mr := BuildMessagesRequest(req, cfg)
-
-	if mr.Model != "claude-sonnet-5" {
-		t.Errorf("upstream model = %q, want base", mr.Model)
-	}
-	if mr.Thinking == nil || mr.Thinking.BudgetTokens != cfg.ThinkingBudgetHigh {
-		t.Errorf("max variant should think high; got %+v", mr.Thinking)
-	}
-	if mr.MaxTokens < cfg.MaxOutputTokens {
-		t.Errorf("max variant should lift max_tokens to >= %d; got %d", cfg.MaxOutputTokens, mr.MaxTokens)
 	}
 }
 

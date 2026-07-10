@@ -40,7 +40,6 @@ func TestAdvertisedModelsVariants(t *testing.T) {
 		"claude-fable-5",
 		"claude-sonnet-5",
 		"claude-sonnet-5-thinking",
-		"claude-sonnet-5-max",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("AdvertisedModels = %#v, want %#v", got, want)

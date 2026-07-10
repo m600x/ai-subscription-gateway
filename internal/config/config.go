@@ -26,18 +26,17 @@ type Config struct {
 	EnableWebSearch   bool
 	MaxThinkingTokens int
 	// ThinkingModels are the base models that accept an explicit thinking
-	// budget. They get "-thinking" and "-max" aliases in /v1/models and
-	// honor reasoning_effort. Models not listed here (e.g. Fable, whose
-	// thinking is always silent server-side) are advertised as-is.
+	// budget. They get a "-thinking" alias in /v1/models (OpenRouter-style
+	// variant id) and honor reasoning_effort. Models not listed here (e.g.
+	// Fable, whose thinking is always silent server-side) are advertised
+	// as-is.
 	ThinkingModels     []string
 	ThinkingBudgetLow  int
 	ThinkingBudgetMed  int
 	ThinkingBudgetHigh int
-	// MaxOutputTokens is the output cap applied to a "-max" model variant.
-	MaxOutputTokens int
-	RequestTimeout  time.Duration
-	MaxRetries      int
-	LogLevel        string
+	RequestTimeout     time.Duration
+	MaxRetries         int
+	LogLevel           string
 }
 
 // Load reads configuration from environment variables and validates it.
@@ -61,7 +60,6 @@ func Load() (*Config, error) {
 		ThinkingBudgetLow:  envInt("THINKING_BUDGET_LOW", 2048),
 		ThinkingBudgetMed:  envInt("THINKING_BUDGET_MEDIUM", 8192),
 		ThinkingBudgetHigh: envInt("THINKING_BUDGET_HIGH", 16384),
-		MaxOutputTokens:    envInt("MAX_OUTPUT_TOKENS", 32000),
 		RequestTimeout:     time.Duration(envInt("REQUEST_TIMEOUT_SECONDS", 600)) * time.Second,
 		MaxRetries:         envInt("MAX_RETRIES", 2),
 		LogLevel:           envStr("LOG_LEVEL", "info"),
@@ -86,7 +84,7 @@ func Load() (*Config, error) {
 }
 
 // IsThinkingModel reports whether the base model accepts an explicit thinking
-// budget (and therefore gets -thinking/-max aliases and honors reasoning_effort).
+// budget (and therefore gets a -thinking alias and honors reasoning_effort).
 func (c *Config) IsThinkingModel(model string) bool {
 	for _, m := range c.ThinkingModels {
 		if m == model {
@@ -97,13 +95,13 @@ func (c *Config) IsThinkingModel(model string) bool {
 }
 
 // AdvertisedModels returns the /v1/models list: every configured model, plus
-// "-thinking" and "-max" aliases for each thinking-capable one.
+// a "-thinking" alias for each thinking-capable one.
 func (c *Config) AdvertisedModels() []string {
 	out := make([]string, 0, len(c.Models))
 	for _, m := range c.Models {
 		out = append(out, m)
 		if c.IsThinkingModel(m) {
-			out = append(out, m+"-thinking", m+"-max")
+			out = append(out, m+"-thinking")
 		}
 	}
 	return out
