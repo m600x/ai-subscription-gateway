@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/claude-subscription-openai-wrapper
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: gofmt
+        id: gofmt
+        continue-on-error: true
+        run: |
+          fmtout=$(gofmt -l .)
+          if [ -n "$fmtout" ]; then
+            echo "These files are not gofmt-formatted:"
+            echo "$fmtout"
+            exit 1
+          fi
+
+      - name: go vet
+        id: vet
+        continue-on-error: true
+        run: go vet ./...
+
+      - name: golangci-lint
+        id: golangci
+        continue-on-error: true
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
+      - name: hadolint (Dockerfile)
+        id: hadolint
+        continue-on-error: true
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Lint"
+            echo
+            echo "| Check | Result |"
+            echo "| ----- | ------ |"
+            echo "| gofmt | ${{ steps.gofmt.outcome }} |"
+            echo "| go vet | ${{ steps.vet.outcome }} |"
+            echo "| golangci-lint | ${{ steps.golangci.outcome }} |"
+            echo "| hadolint | ${{ steps.hadolint.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if any check failed
+        if: contains(steps.*.outcome, 'failure')
+        run: exit 1
+
+  tests:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: go test
+        shell: bash
+        run: go test ./... -count=1 -coverprofile=coverage.out | tee test.out
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Tests"
+            echo
+            echo '```'
+            cat test.out 2>/dev/null || echo "go test produced no output"
+            echo '```'
+            if [ -f coverage.out ]; then
+              echo
+              echo "### Coverage"
+              echo
+              echo '```'
+              go tool cover -func=coverage.out | tail -25
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build multi-arch image (no push)
+        id: docker_build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ env.IMAGE }}:latest
+          outputs: type=oci,dest=/tmp/image-oci.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-oci
+          path: /tmp/image-oci.tar
+          retention-days: 1
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Build"
+            echo
+            echo "| Field | Value |"
+            echo "| ----- | ----- |"
+            echo "| Tag | \`${IMAGE}:latest\` |"
+            echo "| Platforms | \`${PLATFORMS}\` |"
+            if [ -f /tmp/image-oci.tar ]; then
+              echo "| OCI archive size | $(du -h /tmp/image-oci.tar | cut -f1) |"
+            else
+              echo "| OCI archive | missing (build failed) |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  push:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-oci
+          path: /tmp
+
+      - name: Push image to GHCR
+        id: push
+        run: |
+          skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
+          skopeo copy --all "oci-archive:/tmp/image-oci.tar" "docker://${IMAGE}:latest"
+          digest=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:latest")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Push"
+            echo
+            echo "| Field | Value |"
+            echo "| ----- | ----- |"
+            echo "| Pushed | \`${IMAGE}:latest\` |"
+            echo "| Digest | \`${{ steps.push.outputs.digest || 'unavailable (push failed)' }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
