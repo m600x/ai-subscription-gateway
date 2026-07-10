@@ -107,7 +107,10 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 		case "content_block_start":
 			if cfg.EnableWebSearch && ev.ContentBlock != nil && ev.ContentBlock.Type == "server_tool_use" {
 				_ = sendRole()
-				_ = sse.writeChunk(mkChunk(&openai.Delta{Content: "\n> searching the web…\n"}, nil))
+				// Italic status on its own paragraph: the surrounding blank
+				// lines keep the model's answer out of the status styling
+				// (a "> " blockquote would swallow the following text).
+				_ = sse.writeChunk(mkChunk(&openai.Delta{Content: "\n\n*searching the web…*\n\n"}, nil))
 			}
 		case "content_block_delta":
 			if ev.Delta == nil {

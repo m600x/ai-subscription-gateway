@@ -51,6 +51,35 @@ func TestStreamResponseMapping(t *testing.T) {
 	}
 }
 
+func TestStreamResponseWebSearchStatus(t *testing.T) {
+	input := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"m"}}`,
+		``,
+		`data: {"type":"content_block_start","content_block":{"type":"server_tool_use","name":"web_search"}}`,
+		``,
+		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Answer"}}`,
+		``,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	var out strings.Builder
+	sse := NewSSEWriter(&out, func() {})
+	cfg := &config.Config{EnableWebSearch: true}
+	if err := StreamResponse(strings.NewReader(input), sse, "id", "m", cfg); err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+	got := out.String()
+	// Italic status followed by a blank line so the model's answer renders
+	// as a fresh paragraph, not inside the status styling.
+	if !strings.Contains(got, `"content":"\n\n*searching the web…*\n\n"`) {
+		t.Errorf("web search status should be italic with paragraph breaks\n%s", got)
+	}
+	if strings.Contains(got, `\u003e searching`) || strings.Contains(got, "> searching") {
+		t.Errorf("status must not be a blockquote (swallows the answer)\n%s", got)
+	}
+}
+
 func TestStreamResponseLengthFinish(t *testing.T) {
 	input := strings.Join([]string{
 		`data: {"type":"message_start","message":{"id":"m"}}`,
