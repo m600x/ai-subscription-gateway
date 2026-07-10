@@ -80,11 +80,24 @@ type Choice struct {
 	FinishReason *string      `json:"finish_reason"`
 }
 
-// Usage reports token counts in OpenAI shape.
+// PromptTokensDetails is the OpenAI prompt token breakdown.
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+// CompletionTokensDetails is the OpenAI completion token breakdown.
+type CompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
+// Usage reports token counts in OpenAI shape, including the standard
+// details objects (cached prompt tokens, reasoning tokens).
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int                      `json:"prompt_tokens"`
+	CompletionTokens        int                      `json:"completion_tokens"`
+	TotalTokens             int                      `json:"total_tokens"`
+	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
 }
 
 // ChatCompletion is used for both the non-streaming response (object

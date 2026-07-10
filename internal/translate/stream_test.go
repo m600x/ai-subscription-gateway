@@ -80,6 +80,37 @@ func TestStreamResponseWebSearchStatus(t *testing.T) {
 	}
 }
 
+func TestStreamResponseFinalChunkCarriesUsage(t *testing.T) {
+	input := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":45,"cache_read_input_tokens":10,"output_tokens":2}}}`,
+		``,
+		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}`,
+		``,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":45,"output_tokens":475,"output_tokens_details":{"thinking_tokens":126}}}`,
+		``,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	var out strings.Builder
+	sse := NewSSEWriter(&out, func() {})
+	if err := StreamResponse(strings.NewReader(input), sse, "id", "m", &config.Config{}); err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		`"prompt_tokens":55`,
+		`"completion_tokens":475`,
+		`"total_tokens":530`,
+		`"cached_tokens":10`,
+		`"reasoning_tokens":126`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("final chunk missing %s\n%s", want, got)
+		}
+	}
+}
+
 func TestStreamResponseLengthFinish(t *testing.T) {
 	input := strings.Join([]string{
 		`data: {"type":"message_start","message":{"id":"m"}}`,

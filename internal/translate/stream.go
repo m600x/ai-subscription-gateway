@@ -61,6 +61,31 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 
 	roleSent := false
 	finish := "stop"
+	var usage anthropic.Usage
+
+	// mergeUsage keeps the most complete counts seen so far: message_start
+	// carries input/cache tokens, the final message_delta carries the
+	// authoritative output tokens (incl. thinking breakdown).
+	mergeUsage := func(u *anthropic.Usage) {
+		if u == nil {
+			return
+		}
+		if u.InputTokens > 0 {
+			usage.InputTokens = u.InputTokens
+		}
+		if u.CacheReadInputTokens > 0 {
+			usage.CacheReadInputTokens = u.CacheReadInputTokens
+		}
+		if u.CacheCreationInputTokens > 0 {
+			usage.CacheCreationInputTokens = u.CacheCreationInputTokens
+		}
+		if u.OutputTokens > 0 {
+			usage.OutputTokens = u.OutputTokens
+		}
+		if u.OutputTokensDetails != nil {
+			usage.OutputTokensDetails = u.OutputTokensDetails
+		}
+	}
 
 	mkChunk := func(d *openai.Delta, fr *string) openai.ChatCompletion {
 		return openai.ChatCompletion{
@@ -82,7 +107,13 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 
 	finishAndClose := func() {
 		_ = sendRole()
-		_ = sse.writeChunk(mkChunk(&openai.Delta{}, &finish))
+		// Final chunk carries usage (OpenAI stream_options.include_usage
+		// convention); Open WebUI picks it up for its token-usage popover.
+		final := mkChunk(&openai.Delta{}, &finish)
+		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+			final.Usage = BuildUsage(usage)
+		}
+		_ = sse.writeChunk(final)
 		sse.writeRaw("data: [DONE]\n\n")
 	}
 
@@ -101,6 +132,9 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 		}
 		switch ev.Type {
 		case "message_start":
+			if ev.Message != nil {
+				mergeUsage(&ev.Message.Usage)
+			}
 			if err := sendRole(); err != nil {
 				return err
 			}
@@ -137,6 +171,7 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 				}
 			}
 		case "message_delta":
+			mergeUsage(ev.Usage)
 			if ev.Delta != nil && ev.Delta.StopReason != "" {
 				finish = mapStopReason(ev.Delta.StopReason)
 			}

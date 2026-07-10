@@ -17,6 +17,27 @@ func mapStopReason(r string) string {
 	}
 }
 
+// BuildUsage maps Anthropic usage (incl. cache reads and thinking tokens)
+// onto the OpenAI usage shape. Prompt tokens include cache reads/writes so
+// the total reflects what was actually processed.
+func BuildUsage(u anthropic.Usage) *openai.Usage {
+	prompt := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+	out := &openai.Usage{
+		PromptTokens:     prompt,
+		CompletionTokens: u.OutputTokens,
+		TotalTokens:      prompt + u.OutputTokens,
+	}
+	if u.CacheReadInputTokens > 0 {
+		out.PromptTokensDetails = &openai.PromptTokensDetails{CachedTokens: u.CacheReadInputTokens}
+	}
+	if u.OutputTokensDetails != nil && u.OutputTokensDetails.ThinkingTokens > 0 {
+		out.CompletionTokensDetails = &openai.CompletionTokensDetails{
+			ReasoningTokens: u.OutputTokensDetails.ThinkingTokens,
+		}
+	}
+	return out
+}
+
 // BuildChatCompletion maps a non-streaming Anthropic response to an OpenAI
 // chat.completion.
 func BuildChatCompletion(resp *anthropic.MessagesResponse, id, model string) openai.ChatCompletion {
@@ -37,10 +58,6 @@ func BuildChatCompletion(resp *anthropic.MessagesResponse, id, model string) ope
 			Message:      &openai.RespMessage{Role: "assistant", Content: sb.String()},
 			FinishReason: &finish,
 		}},
-		Usage: &openai.Usage{
-			PromptTokens:     resp.Usage.InputTokens,
-			CompletionTokens: resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
-		},
+		Usage: BuildUsage(resp.Usage),
 	}
 }

@@ -49,10 +49,18 @@ type MessagesRequest struct {
 	TopP         *float64      `json:"top_p,omitempty"`
 }
 
-// Usage reports token counts.
+// OutputTokensDetails breaks down output tokens (thinking vs text).
+type OutputTokensDetails struct {
+	ThinkingTokens int `json:"thinking_tokens"`
+}
+
+// Usage reports token counts, including cache and thinking details.
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int                  `json:"input_tokens"`
+	OutputTokens             int                  `json:"output_tokens"`
+	CacheReadInputTokens     int                  `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int                  `json:"cache_creation_input_tokens"`
+	OutputTokensDetails      *OutputTokensDetails `json:"output_tokens_details,omitempty"`
 }
 
 // ContentBlock is one block of a non-streaming response (or a stream block header).
