@@ -1,4 +1,29 @@
-# claude-subscription-openai-wrapper
+# OpenAI wrapper for Claude Subscription
+## Encapsulate your Claude subscription in an OpenAI API compliant
+
+Want to use your Claude subscription (Pro/Max/Enterprise) in OpenWeb UI for example?
+
+```
+# Generate a token (will be valid for one year)
+claude setup-token
+
+# Generate a random access key (use whatever you want, it's just an example)
+openssl rand -hex 32
+
+# Run the wrapper locally
+docker run -d -p 8000:8000 \
+  -e CLIENT_API_KEY=YOUR_ACCESS_KEY \
+  -e ANTHROPIC_OAUTH_TOKEN=YOUR_CLAUDE_TOKEN \
+  --name claude-sub-wrapper \
+  ghcr.io/m600x/claude-subscription-openai-wrapper:latest
+
+# Set the connection in OpenWebUI
+URL: http://localhost:8000/v1
+Auth: (Bearer) YOUR_ACCESS_KEY
+```
+
+---
+## Description
 
 A tiny, fast OpenAI-compatible API in front of **Claude**, backed by a **Pro/Max subscription** (not per-token API billing). It calls the Anthropic Messages API **directly** over HTTP using a subscription OAuth token — no Claude Code CLI subprocess, no Python, no per-request cold start.
 
