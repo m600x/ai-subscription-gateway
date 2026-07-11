@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/config"
+	"github.com/m600x/ai-substation/internal/config"
 )
 
 func testConfig(url string) *config.Config {

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/claude-subscription-openai-wrapper
+  IMAGE: ghcr.io/${{ github.repository_owner }}/ai-substation
   PLATFORMS: linux/amd64,linux/arm64
 
 jobs:

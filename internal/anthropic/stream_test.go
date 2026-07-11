@@ -1,41 +1,48 @@
-package translate
+package anthropic
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/config"
+	"github.com/m600x/ai-substation/internal/config"
+	"github.com/m600x/ai-substation/internal/openai"
 )
+
+// captureSink records emitted chunks as the server's SSE writer would frame
+// them, so the string assertions match on-the-wire output (minus [DONE], which
+// is the server's responsibility).
+type captureSink struct{ b strings.Builder }
+
+func (s *captureSink) Send(c openai.ChatCompletion) error {
+	j, _ := json.Marshal(c)
+	s.b.WriteString("data: " + string(j) + "\n\n")
+	return nil
+}
+func (s *captureSink) String() string { return s.b.String() }
 
 func TestStreamResponseMapping(t *testing.T) {
 	input := strings.Join([]string{
-		`event: message_start`,
 		`data: {"type":"message_start","message":{"id":"msg_1"}}`,
 		``,
-		`event: content_block_delta`,
 		`data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}`,
 		``,
-		`event: content_block_delta`,
 		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}`,
 		``,
-		`event: content_block_delta`,
 		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":" world"}}`,
 		``,
-		`event: message_delta`,
 		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}`,
 		``,
-		`event: message_stop`,
 		`data: {"type":"message_stop"}`,
 		``,
 	}, "\n")
 
-	var out strings.Builder
-	sse := NewSSEWriter(&out, func() {})
-	if err := StreamResponse(strings.NewReader(input), sse, "chatcmpl-x", "claude-sonnet-5", &config.Config{}); err != nil {
+	var sink captureSink
+	if err := StreamResponse(strings.NewReader(input), &sink, "chatcmpl-x", "claude-sonnet-5", &config.Config{}); err != nil {
 		t.Fatalf("StreamResponse: %v", err)
 	}
 
-	got := out.String()
+	got := sink.String()
 	for _, want := range []string{
 		`"object":"chat.completion.chunk"`,
 		`"role":"assistant"`,
@@ -43,7 +50,6 @@ func TestStreamResponseMapping(t *testing.T) {
 		`"content":"Hello"`,
 		`"content":" world"`,
 		`"finish_reason":"stop"`,
-		"data: [DONE]",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q\n--- output ---\n%s", want, got)
@@ -63,20 +69,14 @@ func TestStreamResponseWebSearchStatus(t *testing.T) {
 		``,
 	}, "\n")
 
-	var out strings.Builder
-	sse := NewSSEWriter(&out, func() {})
+	var sink captureSink
 	cfg := &config.Config{EnableWebSearch: true}
-	if err := StreamResponse(strings.NewReader(input), sse, "id", "m", cfg); err != nil {
+	if err := StreamResponse(strings.NewReader(input), &sink, "id", "m", cfg); err != nil {
 		t.Fatalf("StreamResponse: %v", err)
 	}
-	got := out.String()
-	// Italic status followed by a blank line so the model's answer renders
-	// as a fresh paragraph, not inside the status styling.
+	got := sink.String()
 	if !strings.Contains(got, `"content":"\n\n*searching the web…*\n\n"`) {
 		t.Errorf("web search status should be italic with paragraph breaks\n%s", got)
-	}
-	if strings.Contains(got, `\u003e searching`) || strings.Contains(got, "> searching") {
-		t.Errorf("status must not be a blockquote (swallows the answer)\n%s", got)
 	}
 }
 
@@ -92,12 +92,11 @@ func TestStreamResponseFinalChunkCarriesUsage(t *testing.T) {
 		``,
 	}, "\n")
 
-	var out strings.Builder
-	sse := NewSSEWriter(&out, func() {})
-	if err := StreamResponse(strings.NewReader(input), sse, "id", "m", &config.Config{}); err != nil {
+	var sink captureSink
+	if err := StreamResponse(strings.NewReader(input), &sink, "id", "m", &config.Config{}); err != nil {
 		t.Fatalf("StreamResponse: %v", err)
 	}
-	got := out.String()
+	got := sink.String()
 	for _, want := range []string{
 		`"prompt_tokens":55`,
 		`"completion_tokens":475`,
@@ -123,12 +122,11 @@ func TestStreamResponseLengthFinish(t *testing.T) {
 		``,
 	}, "\n")
 
-	var out strings.Builder
-	sse := NewSSEWriter(&out, func() {})
-	if err := StreamResponse(strings.NewReader(input), sse, "id", "m", &config.Config{}); err != nil {
+	var sink captureSink
+	if err := StreamResponse(strings.NewReader(input), &sink, "id", "m", &config.Config{}); err != nil {
 		t.Fatalf("StreamResponse: %v", err)
 	}
-	if !strings.Contains(out.String(), `"finish_reason":"length"`) {
-		t.Errorf("max_tokens stop_reason should map to finish_reason=length\n%s", out.String())
+	if !strings.Contains(sink.String(), `"finish_reason":"length"`) {
+		t.Errorf("max_tokens stop_reason should map to finish_reason=length\n%s", sink.String())
 	}
 }

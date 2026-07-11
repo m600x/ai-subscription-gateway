@@ -1,24 +1,32 @@
-// Package server wires HTTP routes to the Anthropic client and translation layer.
+// Package server wires HTTP routes to the enabled providers and the model
+// registry. It routes each chat request to the provider that owns the named
+// model, aggregates /v1/models across enabled providers, and owns the shared
+// SSE plumbing (keepalives, the trailing [DONE] marker).
 package server
 
 import (
 	"log/slog"
 	"net/http"
 
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/anthropic"
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/config"
+	"github.com/m600x/ai-substation/internal/config"
+	"github.com/m600x/ai-substation/internal/provider"
+	"github.com/m600x/ai-substation/internal/registry"
 )
 
 // Server holds dependencies and the route mux.
 type Server struct {
-	cfg    *config.Config
-	client *anthropic.Client
-	mux    *http.ServeMux
+	cfg       *config.Config
+	reg       *registry.Registry
+	providers map[string]provider.Provider
+	enabled   map[string]bool
+	mux       *http.ServeMux
 }
 
-// New builds the router.
-func New(cfg *config.Config, client *anthropic.Client) *Server {
-	s := &Server{cfg: cfg, client: client, mux: http.NewServeMux()}
+// New builds the router. providers maps a provider name
+// (registry.ProviderAnthropic / ProviderOpenAI) to its implementation;
+// enabled marks which providers are configured.
+func New(cfg *config.Config, reg *registry.Registry, providers map[string]provider.Provider, enabled map[string]bool) *Server {
+	s := &Server{cfg: cfg, reg: reg, providers: providers, enabled: enabled, mux: http.NewServeMux()}
 	s.mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	s.mux.HandleFunc("GET /v1/models", s.handleModels)
 	s.mux.HandleFunc("GET /health", s.handleHealth)

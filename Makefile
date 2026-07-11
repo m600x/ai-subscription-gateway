@@ -1,18 +1,18 @@
-# claude-subscription-openai-wrapper -- developer Makefile
+# ai-substation -- developer Makefile
 #
 # Overridable variables:
-#   IMAGE / TAG        image name + tag           (default claude-subscription-openai-wrapper:latest)
-#   CONTAINER          container name for up/down  (default claude-sub-wrapper)
+#   IMAGE / TAG        image name + tag           (default ai-substation:latest)
+#   CONTAINER          container name for up/down  (default ai-substation)
 #   PORT               host port for `make up`     (default 8000)
 #   PLATFORMS          arches for `make build`     (default linux/amd64,linux/arm64)
 #   PUSH               pass PUSH=--push to push multi-arch build to a registry
 
-IMAGE     ?= claude-subscription-openai-wrapper
+IMAGE     ?= ai-substation
 TAG       ?= latest
-CONTAINER ?= claude-sub-wrapper
+CONTAINER ?= ai-substation
 PORT      ?= 8000
 PLATFORMS ?= linux/amd64,linux/arm64
-BUILDER   ?= csw-multiarch
+BUILDER   ?= ai-substation-multiarch
 PUSH      ?=
 
 BIN := $(CURDIR)/bin

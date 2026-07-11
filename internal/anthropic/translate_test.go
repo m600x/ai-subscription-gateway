@@ -1,33 +1,45 @@
-package translate
+package anthropic
 
 import (
 	"testing"
 
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/config"
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/openai"
+	"github.com/m600x/ai-substation/internal/config"
+	"github.com/m600x/ai-substation/internal/openai"
+	"github.com/m600x/ai-substation/internal/registry"
 )
 
 func testCfg() *config.Config {
 	return &config.Config{
-		SpoofSystemPrompt:       "You are Claude Code, Anthropic's official CLI for Claude.",
-		DefaultModel:            "claude-sonnet-5",
-		DefaultMaxTokens:        8192,
-		ThinkingModels:          []string{"claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"},
-		ThinkingAlwaysOnModels:  []string{"claude-fable-5"},
-		ThinkingDefaultOnModels: []string{"claude-sonnet-5"},
-		ThinkingDisplay:         "summarized",
+		SpoofSystemPrompt: "You are Claude Code, Anthropic's official CLI for Claude.",
+		DefaultMaxTokens:  8192,
+		ThinkingDisplay:   "summarized",
 	}
+}
+
+var fullLadder = []string{"off", "low", "medium", "high", "xhigh", "max"}
+
+func modelSonnet() registry.Model {
+	return registry.Model{ID: "claude-sonnet-5", Provider: "anthropic", UpstreamID: "claude-sonnet-5",
+		Reasoning: registry.Reasoning{Efforts: fullLadder, Default: "high", Mode: registry.ModeDefaultOn}, DefaultMaxTokens: 8192}
+}
+func modelOpus() registry.Model {
+	return registry.Model{ID: "claude-opus-4-8", Provider: "anthropic", UpstreamID: "claude-opus-4-8",
+		Reasoning: registry.Reasoning{Efforts: fullLadder, Default: "high", Mode: registry.ModeOptIn}, DefaultMaxTokens: 8192}
+}
+func modelFable() registry.Model {
+	return registry.Model{ID: "claude-fable-5", Provider: "anthropic", UpstreamID: "claude-fable-5",
+		Reasoning: registry.Reasoning{Efforts: []string{"low", "medium", "high", "xhigh", "max"}, Default: "high", Mode: registry.ModeAlwaysOn}, DefaultMaxTokens: 8192}
 }
 
 func TestSpoofIsFirstSystemBlock(t *testing.T) {
 	cfg := testCfg()
 	req := openai.ChatCompletionRequest{
 		Messages: []openai.ChatMessage{
-			{Role: "system", Content: "You are a pirate."},
-			{Role: "user", Content: "hi"},
+			{Role: "system", Content: openai.Content{Text: "You are a pirate."}},
+			{Role: "user", Content: openai.Content{Text: "hi"}},
 		},
 	}
-	mr := BuildMessagesRequest(req, cfg)
+	mr := BuildMessagesRequest(req, modelSonnet(), cfg)
 
 	if len(mr.System) != 2 {
 		t.Fatalf("want 2 system blocks, got %d", len(mr.System))
@@ -42,20 +54,19 @@ func TestSpoofIsFirstSystemBlock(t *testing.T) {
 		t.Errorf("default max_tokens not injected; got %d", mr.MaxTokens)
 	}
 	if mr.Model != "claude-sonnet-5" {
-		t.Errorf("default model not applied; got %q", mr.Model)
+		t.Errorf("upstream model not applied; got %q", mr.Model)
 	}
 }
 
 func TestCoalesceConsecutiveRoles(t *testing.T) {
-	cfg := testCfg()
 	req := openai.ChatCompletionRequest{
 		Messages: []openai.ChatMessage{
-			{Role: "user", Content: "a"},
-			{Role: "user", Content: "b"},
-			{Role: "assistant", Content: "c"},
+			{Role: "user", Content: openai.Content{Text: "a"}},
+			{Role: "user", Content: openai.Content{Text: "b"}},
+			{Role: "assistant", Content: openai.Content{Text: "c"}},
 		},
 	}
-	mr := BuildMessagesRequest(req, cfg)
+	mr := BuildMessagesRequest(req, modelSonnet(), testCfg())
 
 	if len(mr.Messages) != 2 {
 		t.Fatalf("want 2 coalesced messages, got %d", len(mr.Messages))
@@ -66,13 +77,12 @@ func TestCoalesceConsecutiveRoles(t *testing.T) {
 }
 
 func TestClientMaxTokensHonored(t *testing.T) {
-	cfg := testCfg()
 	mt := 100
 	req := openai.ChatCompletionRequest{
 		MaxTokens: &mt,
-		Messages:  []openai.ChatMessage{{Role: "user", Content: "hi"}},
+		Messages:  []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}},
 	}
-	mr := BuildMessagesRequest(req, cfg)
+	mr := BuildMessagesRequest(req, modelSonnet(), testCfg())
 	if mr.MaxTokens != 100 {
 		t.Errorf("client max_tokens not honored; got %d", mr.MaxTokens)
 	}
@@ -85,13 +95,10 @@ func TestEffortEnablesAdaptiveAndDropsSampling(t *testing.T) {
 		Model:           "claude-sonnet-5",
 		ReasoningEffort: "high",
 		Temperature:     &temp,
-		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+		Messages:        []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}},
 	}
-	mr := BuildMessagesRequest(req, cfg)
+	mr := BuildMessagesRequest(req, modelSonnet(), cfg)
 
-	if mr.Model != "claude-sonnet-5" {
-		t.Errorf("model must pass through unchanged; got %q", mr.Model)
-	}
 	if mr.Thinking == nil || mr.Thinking.Type != "adaptive" || mr.Thinking.Display != "summarized" {
 		t.Errorf("want adaptive thinking with summarized display; got %+v", mr.Thinking)
 	}
@@ -107,14 +114,13 @@ func TestEffortEnablesAdaptiveAndDropsSampling(t *testing.T) {
 }
 
 func TestEffortLadderPassesThrough(t *testing.T) {
-	cfg := testCfg()
 	for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
 		req := openai.ChatCompletionRequest{
 			Model:           "claude-opus-4-8",
 			ReasoningEffort: effort,
-			Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+			Messages:        []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}},
 		}
-		mr := BuildMessagesRequest(req, cfg)
+		mr := BuildMessagesRequest(req, modelOpus(), testCfg())
 		if mr.Thinking == nil || mr.Thinking.Type != "adaptive" {
 			t.Errorf("effort %q: want adaptive thinking; got %+v", effort, mr.Thinking)
 		}
@@ -124,27 +130,28 @@ func TestEffortLadderPassesThrough(t *testing.T) {
 	}
 }
 
-func TestUnknownModelIgnoresEffort(t *testing.T) {
-	cfg := testCfg()
+func TestEffortNotInLadderIsIgnored(t *testing.T) {
+	// A model whose ladder omits an effort must ignore that request value.
+	m := modelOpus()
+	m.Reasoning.Efforts = []string{"low", "medium", "high"}
 	req := openai.ChatCompletionRequest{
-		Model:           "claude-3-haiku",
+		Model:           "claude-opus-4-8",
 		ReasoningEffort: "xhigh",
-		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+		Messages:        []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}},
 	}
-	mr := BuildMessagesRequest(req, cfg)
+	mr := BuildMessagesRequest(req, m, testCfg())
 	if mr.Thinking != nil || mr.OutputConfig != nil {
-		t.Errorf("non-thinking model must ignore reasoning_effort; got %+v %+v", mr.Thinking, mr.OutputConfig)
+		t.Errorf("unsupported effort must be ignored; got %+v %+v", mr.Thinking, mr.OutputConfig)
 	}
 }
 
 func TestOffDisablesThinkingOnDefaultOnModel(t *testing.T) {
-	cfg := testCfg()
 	req := openai.ChatCompletionRequest{
 		Model:           "claude-sonnet-5",
 		ReasoningEffort: "off",
-		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+		Messages:        []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}},
 	}
-	mr := BuildMessagesRequest(req, cfg)
+	mr := BuildMessagesRequest(req, modelSonnet(), testCfg())
 	// Sonnet 5 thinks by default -> "off" must send an explicit disable.
 	if mr.Thinking == nil || mr.Thinking.Type != "disabled" {
 		t.Errorf("off on a default-on model should send thinking disabled; got %+v", mr.Thinking)
@@ -155,38 +162,36 @@ func TestOffDisablesThinkingOnDefaultOnModel(t *testing.T) {
 }
 
 func TestOffIgnoredOnAlwaysOnModel(t *testing.T) {
-	cfg := testCfg()
 	req := openai.ChatCompletionRequest{
 		Model:           "claude-fable-5",
 		ReasoningEffort: "off",
-		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+		Messages:        []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}},
 	}
-	mr := BuildMessagesRequest(req, cfg)
+	mr := BuildMessagesRequest(req, modelFable(), testCfg())
 	// Fable rejects thinking.type=disabled -> send nothing.
 	if mr.Thinking != nil {
 		t.Errorf("off on an always-on model must omit the thinking config; got %+v", mr.Thinking)
 	}
 }
 
-func TestOffOnRegularModelSendsNothing(t *testing.T) {
-	cfg := testCfg()
+func TestOffOnOptInModelSendsNothing(t *testing.T) {
 	req := openai.ChatCompletionRequest{
 		Model:           "claude-opus-4-8",
 		ReasoningEffort: "off",
-		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
+		Messages:        []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}},
 	}
-	mr := BuildMessagesRequest(req, cfg)
+	mr := BuildMessagesRequest(req, modelOpus(), testCfg())
 	// Opus doesn't think unless asked -> no config needed to stay off.
 	if mr.Thinking != nil || mr.OutputConfig != nil {
-		t.Errorf("off on an off-by-default model should send nothing; got %+v %+v", mr.Thinking, mr.OutputConfig)
+		t.Errorf("off on an opt-in model should send nothing; got %+v %+v", mr.Thinking, mr.OutputConfig)
 	}
 }
 
 func TestWebSearchToolAddedWhenEnabled(t *testing.T) {
 	cfg := testCfg()
 	cfg.EnableWebSearch = true
-	req := openai.ChatCompletionRequest{Messages: []openai.ChatMessage{{Role: "user", Content: "hi"}}}
-	mr := BuildMessagesRequest(req, cfg)
+	req := openai.ChatCompletionRequest{Messages: []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}}}
+	mr := BuildMessagesRequest(req, modelSonnet(), cfg)
 	if len(mr.Tools) != 1 || mr.Tools[0].Name != "web_search" {
 		t.Errorf("web_search tool not added; got %+v", mr.Tools)
 	}

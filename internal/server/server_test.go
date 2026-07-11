@@ -5,25 +5,39 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/anthropic"
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/config"
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/openai"
+	"github.com/m600x/ai-substation/internal/anthropic"
+	"github.com/m600x/ai-substation/internal/config"
+	"github.com/m600x/ai-substation/internal/openai"
+	"github.com/m600x/ai-substation/internal/provider"
+	"github.com/m600x/ai-substation/internal/registry"
 )
 
 const spoof = "You are Claude Code, Anthropic's official CLI for Claude."
+
+const testModelsJSON = `{
+  "models": [
+    {"id":"claude-sonnet-5","provider":"anthropic","upstream_id":"claude-sonnet-5",
+     "reasoning":{"efforts":["off","low","medium","high","xhigh","max"],"default":"high","mode":"default-on"},"default_max_tokens":8192},
+    {"id":"claude-opus-4-8","provider":"anthropic","upstream_id":"claude-opus-4-8",
+     "reasoning":{"efforts":["off","low","medium","high"],"default":"high","mode":"opt-in"},"default_max_tokens":8192},
+    {"id":"gpt-5-codex","provider":"openai","upstream_id":"gpt-5-codex",
+     "reasoning":{"efforts":["low","medium","high"],"default":"medium"}}
+  ]
+}`
 
 type captured struct {
 	mu     sync.Mutex
 	system []string
 }
 
-// mockUpstream fakes the Anthropic Messages API. It records the system blocks
-// it received and returns either JSON or SSE depending on the stream flag.
+// mockUpstream fakes the Anthropic Messages API.
 func mockUpstream(cap *captured) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -53,19 +67,36 @@ func mockUpstream(cap *captured) *httptest.Server {
 	}))
 }
 
-func newTestServer(upstreamURL string) *httptest.Server {
+func testRegistry(t *testing.T) *registry.Registry {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(path, []byte(testModelsJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := registry.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+// newTestServer wires an anthropic-only server (OpenAI provider disabled)
+// pointed at the mock upstream.
+func newTestServer(t *testing.T, upstreamURL string) *httptest.Server {
 	cfg := &config.Config{
 		ClientAPIKey:      "ck",
 		OAuthToken:        "tok",
 		AnthropicBaseURL:  upstreamURL,
 		AnthropicVersion:  "2023-06-01",
 		SpoofSystemPrompt: spoof,
-		Models:            []string{"claude-sonnet-5", "claude-opus-4-8"},
 		DefaultModel:      "claude-sonnet-5",
 		DefaultMaxTokens:  1024,
 		RequestTimeout:    5 * time.Second,
 	}
-	return httptest.NewServer(New(cfg, anthropic.New(cfg)))
+	reg := testRegistry(t)
+	providers := map[string]provider.Provider{registry.ProviderAnthropic: anthropic.NewProvider(cfg)}
+	enabled := map[string]bool{registry.ProviderAnthropic: true, registry.ProviderOpenAI: false}
+	return httptest.NewServer(New(cfg, reg, providers, enabled))
 }
 
 func post(t *testing.T, url, key, bodyJSON string) *http.Response {
@@ -88,7 +119,7 @@ func post(t *testing.T, url, key, bodyJSON string) *http.Response {
 func TestHealthNoAuth(t *testing.T) {
 	up := mockUpstream(&captured{})
 	defer up.Close()
-	ts := newTestServer(up.URL)
+	ts := newTestServer(t, up.URL)
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/health")
@@ -101,10 +132,10 @@ func TestHealthNoAuth(t *testing.T) {
 	}
 }
 
-func TestModelsAuth(t *testing.T) {
+func TestModelsListsOnlyEnabledProviders(t *testing.T) {
 	up := mockUpstream(&captured{})
 	defer up.Close()
-	ts := newTestServer(up.URL)
+	ts := newTestServer(t, up.URL)
 	defer ts.Close()
 
 	// No key -> 401.
@@ -117,7 +148,6 @@ func TestModelsAuth(t *testing.T) {
 		t.Fatalf("unauth models status = %d, want 401", resp.StatusCode)
 	}
 
-	// With key -> list.
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer ck")
 	resp2, err := http.DefaultClient.Do(req)
@@ -125,13 +155,16 @@ func TestModelsAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp2.Body.Close()
-	if resp2.StatusCode != 200 {
-		t.Fatalf("models status = %d", resp2.StatusCode)
-	}
 	var list openai.ModelList
 	json.NewDecoder(resp2.Body).Decode(&list)
-	if len(list.Data) != 2 || list.Data[0].ID != "claude-sonnet-5" {
-		t.Errorf("models = %+v", list.Data)
+	// OpenAI is disabled, so gpt-5-codex must not appear.
+	if len(list.Data) != 2 || list.Data[0].ID != "claude-sonnet-5" || list.Data[1].ID != "claude-opus-4-8" {
+		t.Errorf("models = %+v, want the two anthropic models only", list.Data)
+	}
+	for _, m := range list.Data {
+		if m.OwnedBy != "anthropic" {
+			t.Errorf("model %q owned_by = %q", m.ID, m.OwnedBy)
+		}
 	}
 }
 
@@ -139,7 +172,7 @@ func TestChatNonStreamAndSpoof(t *testing.T) {
 	cap := &captured{}
 	up := mockUpstream(cap)
 	defer up.Close()
-	ts := newTestServer(up.URL)
+	ts := newTestServer(t, up.URL)
 	defer ts.Close()
 
 	// Wrong key -> 401.
@@ -163,8 +196,6 @@ func TestChatNonStreamAndSpoof(t *testing.T) {
 		t.Errorf("completion = %+v", cc)
 	}
 
-	// The upstream must have received the exact spoof as the first system block,
-	// with the user's system prompt appended second.
 	cap.mu.Lock()
 	defer cap.mu.Unlock()
 	if len(cap.system) != 2 {
@@ -181,7 +212,7 @@ func TestChatNonStreamAndSpoof(t *testing.T) {
 func TestChatStreaming(t *testing.T) {
 	up := mockUpstream(&captured{})
 	defer up.Close()
-	ts := newTestServer(up.URL)
+	ts := newTestServer(t, up.URL)
 	defer ts.Close()
 
 	resp := post(t, ts.URL+"/v1/chat/completions", "ck",
@@ -199,5 +230,44 @@ func TestChatStreaming(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("stream missing %q\n--- got ---\n%s", want, out)
 		}
+	}
+}
+
+func TestUnknownModelRejected(t *testing.T) {
+	up := mockUpstream(&captured{})
+	defer up.Close()
+	ts := newTestServer(t, up.URL)
+	defer ts.Close()
+
+	resp := post(t, ts.URL+"/v1/chat/completions", "ck",
+		`{"model":"does-not-exist","messages":[{"role":"user","content":"hi"}]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("unknown model status = %d, want 400", resp.StatusCode)
+	}
+	var er openai.ErrorResponse
+	json.NewDecoder(resp.Body).Decode(&er)
+	if er.Error.Code != "model_not_found" {
+		t.Errorf("error code = %q, want model_not_found", er.Error.Code)
+	}
+}
+
+func TestDisabledProviderModelRejected(t *testing.T) {
+	up := mockUpstream(&captured{})
+	defer up.Close()
+	ts := newTestServer(t, up.URL)
+	defer ts.Close()
+
+	// gpt-5-codex is in the registry but the OpenAI provider is disabled.
+	resp := post(t, ts.URL+"/v1/chat/completions", "ck",
+		`{"model":"gpt-5-codex","messages":[{"role":"user","content":"hi"}]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("disabled-provider model status = %d, want 400", resp.StatusCode)
+	}
+	var er openai.ErrorResponse
+	json.NewDecoder(resp.Body).Decode(&er)
+	if er.Error.Code != "provider_not_configured" {
+		t.Errorf("error code = %q, want provider_not_configured", er.Error.Code)
 	}
 }

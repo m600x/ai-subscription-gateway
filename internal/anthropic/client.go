@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/config"
+	"github.com/m600x/ai-substation/internal/config"
 )
 
 // Client talks to the Anthropic Messages API with a subscription OAuth token.
@@ -44,6 +44,12 @@ type Error struct {
 func (e *Error) Error() string {
 	return fmt.Sprintf("anthropic %d %s: %s", e.Status, e.Type, e.Message)
 }
+
+// HTTPStatus implements provider.HTTPError.
+func (e *Error) HTTPStatus() int { return e.Status }
+
+// ErrType implements provider.HTTPError.
+func (e *Error) ErrType() string { return e.Type }
 
 func (c *Client) newRequest(ctx context.Context, body []byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.AnthropicBaseURL+"/v1/messages", bytes.NewReader(body))

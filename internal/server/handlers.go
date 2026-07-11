@@ -1,24 +1,17 @@
 package server
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/anthropic"
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/openai"
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/translate"
+	"github.com/m600x/ai-substation/internal/openai"
+	"github.com/m600x/ai-substation/internal/provider"
+	"github.com/m600x/ai-substation/internal/registry"
 )
-
-func newID() string {
-	b := make([]byte, 12)
-	_, _ = rand.Read(b)
-	return "chatcmpl-" + hex.EncodeToString(b)
-}
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -31,8 +24,8 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Unix()
 	list := openai.ModelList{Object: "list"}
-	for _, m := range s.cfg.Models {
-		list.Data = append(list.Data, openai.Model{ID: m, Object: "model", Created: now, OwnedBy: "anthropic"})
+	for _, m := range s.reg.Public(s.enabled) {
+		list.Data = append(list.Data, openai.Model{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider})
 	}
 	writeJSON(w, http.StatusOK, list)
 }
@@ -52,47 +45,71 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model := req.Model
-	if model == "" {
-		model = s.cfg.DefaultModel
+	modelID := req.Model
+	if modelID == "" {
+		modelID = s.cfg.DefaultModel
 	}
-	mr := translate.BuildMessagesRequest(req, s.cfg)
-	id := newID()
-
-	if req.Stream {
-		s.streamCompletion(w, r, mr, id, model)
+	m, prov, ok := s.resolve(w, modelID)
+	if !ok {
 		return
 	}
 
-	resp, err := s.client.CreateMessage(r.Context(), mr)
+	if req.Stream {
+		s.streamCompletion(w, r, req, m, prov)
+		return
+	}
+
+	resp, err := prov.Complete(r.Context(), req, m)
 	if err != nil {
 		writeUpstreamError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, translate.BuildChatCompletion(resp, id, model))
+	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, mr anthropic.MessagesRequest, id, model string) {
+// resolve maps a model id to its registry entry and enabled provider, writing
+// an error response and returning ok=false when the model is unknown or its
+// provider is not configured.
+func (s *Server) resolve(w http.ResponseWriter, modelID string) (registry.Model, provider.Provider, bool) {
+	if modelID == "" {
+		writeError(w, http.StatusBadRequest, "no model specified and no default configured", "invalid_request_error", "")
+		return registry.Model{}, nil, false
+	}
+	m, found := s.reg.Lookup(modelID)
+	if !found {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("model %q is not in the registry", modelID), "invalid_request_error", "model_not_found")
+		return registry.Model{}, nil, false
+	}
+	if !s.enabled[m.Provider] {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("model %q requires the %s provider, which is not configured", modelID, m.Provider),
+			"invalid_request_error", "provider_not_configured")
+		return registry.Model{}, nil, false
+	}
+	prov, ok := s.providers[m.Provider]
+	if !ok || prov == nil {
+		writeError(w, http.StatusInternalServerError,
+			fmt.Sprintf("no provider wired for %q", m.Provider), "internal_error", "")
+		return registry.Model{}, nil, false
+	}
+	return m, prov, true
+}
+
+func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, req openai.ChatCompletionRequest, m registry.Model, prov provider.Provider) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming unsupported", "internal_error", "")
 		return
 	}
 
-	body, err := s.client.StreamMessage(r.Context(), mr)
-	if err != nil {
-		writeUpstreamError(w, err)
-		return
-	}
-	defer func() { _ = body.Close() }()
-
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
 
-	sse := translate.NewSSEWriter(w, flusher.Flush)
+	// The 200 status is deferred to the first write so an upstream error that
+	// arrives before any output can still surface as a real HTTP error.
+	sse := newSSEWriter(w, flusher.Flush, func() { w.WriteHeader(http.StatusOK) })
 
 	// Keepalive comments during silent stretches so intermediaries don't buffer
 	// or time out the stream.
@@ -105,15 +122,22 @@ func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, mr ant
 			case <-done:
 				return
 			case <-t.C:
-				sse.WriteComment(": keepalive")
+				sse.writeComment(": keepalive")
 			}
 		}
 	}()
-	defer close(done)
 
-	if err := translate.StreamResponse(body, sse, id, model, s.cfg); err != nil {
+	err := prov.Stream(r.Context(), req, m, sse)
+	close(done)
+	if err != nil {
+		if !sse.Started() {
+			// Nothing sent yet: a real HTTP error status is still possible.
+			writeUpstreamError(w, err)
+			return
+		}
 		slog.Warn("stream ended with error", "err", err)
 	}
+	sse.writeRaw("data: [DONE]\n\n")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -127,17 +151,17 @@ func writeError(w http.ResponseWriter, status int, msg, typ, code string) {
 }
 
 func writeUpstreamError(w http.ResponseWriter, err error) {
-	var ae *anthropic.Error
-	if errors.As(err, &ae) {
-		status := ae.Status
+	var he provider.HTTPError
+	if errors.As(err, &he) {
+		status := he.HTTPStatus()
 		if status == 0 {
 			status = http.StatusBadGateway
 		}
-		typ := ae.Type
+		typ := he.ErrType()
 		if typ == "" {
 			typ = "upstream_error"
 		}
-		writeError(w, status, ae.Message, typ, "")
+		writeError(w, status, he.Error(), typ, "")
 		return
 	}
 	writeError(w, http.StatusBadGateway, err.Error(), "upstream_error", "")

@@ -1,72 +1,33 @@
-package translate
+package anthropic
 
 import (
 	"bufio"
 	"encoding/json"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/anthropic"
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/config"
-	"github.com/m600x/claude-subscription-openai-wrapper/internal/openai"
+	"github.com/m600x/ai-substation/internal/config"
+	"github.com/m600x/ai-substation/internal/openai"
+	"github.com/m600x/ai-substation/internal/provider"
 )
 
-// SSEWriter serializes writes to the client's event stream so real content
-// chunks and background keepalives never interleave mid-line.
-type SSEWriter struct {
-	w     io.Writer
-	flush func()
-	mu    sync.Mutex
-}
-
-// NewSSEWriter wraps an io.Writer and a flush callback (e.g. http.Flusher.Flush).
-func NewSSEWriter(w io.Writer, flush func()) *SSEWriter {
-	return &SSEWriter{w: w, flush: flush}
-}
-
-func (s *SSEWriter) writeChunk(c openai.ChatCompletion) error {
-	b, err := json.Marshal(c)
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := io.WriteString(s.w, "data: "+string(b)+"\n\n"); err != nil {
-		return err
-	}
-	s.flush()
-	return nil
-}
-
-func (s *SSEWriter) writeRaw(str string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, _ = io.WriteString(s.w, str)
-	s.flush()
-}
-
-// WriteComment emits an SSE comment line (used for keepalives). Safe to call
-// concurrently with the streaming loop.
-func (s *SSEWriter) WriteComment(text string) {
-	s.writeRaw(text + "\n\n")
-}
-
 // StreamResponse reads the Anthropic SSE stream from r and writes translated
-// OpenAI chunks via sse until the stream ends.
-func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.Config) error {
+// OpenAI chunks via sink until the stream ends. It emits every
+// chat.completion.chunk including the final finish/usage chunk; the caller
+// (server) owns the trailing "data: [DONE]" marker.
+func StreamResponse(r io.Reader, sink provider.ChunkSink, id, model string, cfg *config.Config) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
 	roleSent := false
 	finish := "stop"
-	var usage anthropic.Usage
+	var usage Usage
 
 	// mergeUsage keeps the most complete counts seen so far: message_start
 	// carries input/cache tokens, the final message_delta carries the
 	// authoritative output tokens (incl. thinking breakdown).
-	mergeUsage := func(u *anthropic.Usage) {
+	mergeUsage := func(u *Usage) {
 		if u == nil {
 			return
 		}
@@ -102,7 +63,7 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 			return nil
 		}
 		roleSent = true
-		return sse.writeChunk(mkChunk(&openai.Delta{Role: "assistant"}, nil))
+		return sink.Send(mkChunk(&openai.Delta{Role: "assistant"}, nil))
 	}
 
 	finishAndClose := func() {
@@ -113,8 +74,7 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
 			final.Usage = BuildUsage(usage)
 		}
-		_ = sse.writeChunk(final)
-		sse.writeRaw("data: [DONE]\n\n")
+		_ = sink.Send(final)
 	}
 
 	for scanner.Scan() {
@@ -126,7 +86,7 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 		if payload == "" {
 			continue
 		}
-		var ev anthropic.StreamEvent
+		var ev StreamEvent
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			continue
 		}
@@ -144,7 +104,7 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 				// Italic status on its own paragraph: the surrounding blank
 				// lines keep the model's answer out of the status styling
 				// (a "> " blockquote would swallow the following text).
-				_ = sse.writeChunk(mkChunk(&openai.Delta{Content: "\n\n*searching the web…*\n\n"}, nil))
+				_ = sink.Send(mkChunk(&openai.Delta{Content: "\n\n*searching the web…*\n\n"}, nil))
 			}
 		case "content_block_delta":
 			if ev.Delta == nil {
@@ -156,7 +116,7 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 					if err := sendRole(); err != nil {
 						return err
 					}
-					if err := sse.writeChunk(mkChunk(&openai.Delta{Content: ev.Delta.Text}, nil)); err != nil {
+					if err := sink.Send(mkChunk(&openai.Delta{Content: ev.Delta.Text}, nil)); err != nil {
 						return err
 					}
 				}
@@ -165,7 +125,7 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 					if err := sendRole(); err != nil {
 						return err
 					}
-					if err := sse.writeChunk(mkChunk(&openai.Delta{ReasoningContent: ev.Delta.Thinking}, nil)); err != nil {
+					if err := sink.Send(mkChunk(&openai.Delta{ReasoningContent: ev.Delta.Thinking}, nil)); err != nil {
 						return err
 					}
 				}
@@ -184,7 +144,7 @@ func StreamResponse(r io.Reader, sse *SSEWriter, id, model string, cfg *config.C
 				msg = ev.Error.Message
 			}
 			_ = sendRole()
-			_ = sse.writeChunk(mkChunk(&openai.Delta{Content: "\n[error] " + msg}, nil))
+			_ = sink.Send(mkChunk(&openai.Delta{Content: "\n[error] " + msg}, nil))
 			finishAndClose()
 			return nil
 		}

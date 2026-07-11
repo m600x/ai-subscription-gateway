@@ -9,7 +9,11 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/server /server
+WORKDIR /app
+COPY --from=build /out/server /app/server
+# The model registry (source of truth for advertised models + reasoning
+# efforts). Override at runtime by mounting your own or setting MODELS_CONFIG.
+COPY --from=build /src/models.json /app/models.json
 EXPOSE 8000
 USER nonroot:nonroot
-ENTRYPOINT ["/server"]
+ENTRYPOINT ["/app/server"]
