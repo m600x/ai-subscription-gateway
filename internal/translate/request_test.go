@@ -78,24 +78,25 @@ func TestClientMaxTokensHonored(t *testing.T) {
 	}
 }
 
-func TestThinkingVariantEnablesAdaptiveAndDropsSampling(t *testing.T) {
+func TestEffortEnablesAdaptiveAndDropsSampling(t *testing.T) {
 	cfg := testCfg()
 	temp := 0.7
 	req := openai.ChatCompletionRequest{
-		Model:       "claude-sonnet-5-thinking",
-		Temperature: &temp,
-		Messages:    []openai.ChatMessage{{Role: "user", Content: "hi"}},
+		Model:           "claude-sonnet-5",
+		ReasoningEffort: "high",
+		Temperature:     &temp,
+		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
 	}
 	mr := BuildMessagesRequest(req, cfg)
 
 	if mr.Model != "claude-sonnet-5" {
-		t.Errorf("variant suffix not stripped for upstream; got %q", mr.Model)
+		t.Errorf("model must pass through unchanged; got %q", mr.Model)
 	}
 	if mr.Thinking == nil || mr.Thinking.Type != "adaptive" || mr.Thinking.Display != "summarized" {
 		t.Errorf("want adaptive thinking with summarized display; got %+v", mr.Thinking)
 	}
 	if mr.OutputConfig == nil || mr.OutputConfig.Effort != "high" {
-		t.Errorf("-thinking variant should default to high effort; got %+v", mr.OutputConfig)
+		t.Errorf("effort not passed through; got %+v", mr.OutputConfig)
 	}
 	if mr.Temperature != nil {
 		t.Error("temperature must be dropped when thinking is active")
@@ -123,16 +124,16 @@ func TestEffortLadderPassesThrough(t *testing.T) {
 	}
 }
 
-func TestReasoningEffortOverridesVariant(t *testing.T) {
+func TestUnknownModelIgnoresEffort(t *testing.T) {
 	cfg := testCfg()
 	req := openai.ChatCompletionRequest{
-		Model:           "claude-sonnet-5-thinking",
+		Model:           "claude-3-haiku",
 		ReasoningEffort: "xhigh",
 		Messages:        []openai.ChatMessage{{Role: "user", Content: "hi"}},
 	}
 	mr := BuildMessagesRequest(req, cfg)
-	if mr.OutputConfig == nil || mr.OutputConfig.Effort != "xhigh" {
-		t.Errorf("explicit reasoning_effort should win; got %+v", mr.OutputConfig)
+	if mr.Thinking != nil || mr.OutputConfig != nil {
+		t.Errorf("non-thinking model must ignore reasoning_effort; got %+v %+v", mr.Thinking, mr.OutputConfig)
 	}
 }
 

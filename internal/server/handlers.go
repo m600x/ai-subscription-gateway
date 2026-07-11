@@ -31,7 +31,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Unix()
 	list := openai.ModelList{Object: "list"}
-	for _, m := range s.cfg.AdvertisedModels() {
+	for _, m := range s.cfg.Models {
 		list.Data = append(list.Data, openai.Model{ID: m, Object: "model", Created: now, OwnedBy: "anthropic"})
 	}
 	writeJSON(w, http.StatusOK, list)

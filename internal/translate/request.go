@@ -45,10 +45,9 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, cfg *config.Config) 
 	if model == "" {
 		model = cfg.DefaultModel
 	}
-	base, variant := splitModelVariant(model)
 
 	out := anthropic.MessagesRequest{
-		Model:     base,
+		Model:     model,
 		MaxTokens: maxTokens,
 		System:    system,
 		Messages:  msgs,
@@ -56,7 +55,7 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, cfg *config.Config) 
 	}
 
 	thinking := false
-	switch effort := resolveEffort(base, variant, req.ReasoningEffort, cfg); effort {
+	switch effort := resolveEffort(model, req.ReasoningEffort, cfg); effort {
 	case "":
 		// Default: no thinking config. Default-on models (Sonnet 5) and
 		// always-on models (Fable 5) still think adaptively at their own
@@ -64,7 +63,7 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, cfg *config.Config) 
 	case "off":
 		// Always-on models reject an explicit disable -- omit the config
 		// and let the model do its (unavoidable) silent thinking.
-		if !cfg.IsThinkingAlwaysOn(base) && cfg.IsThinkingDefaultOn(base) {
+		if !cfg.IsThinkingAlwaysOn(model) && cfg.IsThinkingDefaultOn(model) {
 			out.Thinking = &anthropic.Thinking{Type: "disabled"}
 		}
 	default:
@@ -91,15 +90,6 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, cfg *config.Config) 
 	return out
 }
 
-// splitModelVariant strips a "-thinking" suffix, returning the base model id
-// and the variant ("thinking" or "").
-func splitModelVariant(model string) (base, variant string) {
-	if strings.HasSuffix(model, "-thinking") {
-		return strings.TrimSuffix(model, "-thinking"), "thinking"
-	}
-	return model, ""
-}
-
 // normalizeEffort maps a reasoning_effort value onto the Anthropic effort
 // ladder (low|medium|high|xhigh|max), "off" for an explicit disable, or ""
 // when unspecified/unrecognized.
@@ -116,21 +106,14 @@ func normalizeEffort(effort string) string {
 	}
 }
 
-// resolveEffort decides the effort for a request. Precedence: an explicit
-// reasoning_effort always wins; otherwise a -thinking variant enables
-// adaptive thinking at the API default effort (high). Non-thinking models
-// always resolve to "" (no thinking config sent).
-func resolveEffort(base, variant, effort string, cfg *config.Config) string {
-	if !cfg.IsThinkingModel(base) {
+// resolveEffort decides the effort for a request from the client's
+// reasoning_effort. Non-thinking models always resolve to "" (no thinking
+// config sent).
+func resolveEffort(model, effort string, cfg *config.Config) string {
+	if !cfg.IsThinkingModel(model) {
 		return ""
 	}
-	if e := normalizeEffort(effort); e != "" {
-		return e
-	}
-	if variant == "thinking" {
-		return "high"
-	}
-	return ""
+	return normalizeEffort(effort)
 }
 
 // coalesce merges consecutive same-role messages (Anthropic requires

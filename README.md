@@ -66,10 +66,7 @@ Clients must send `Authorization: Bearer <CLIENT_API_KEY>` (except `/health`).
 
 ## Reasoning controls (adaptive thinking + the effort ladder)
 
-Current Claude models use **adaptive thinking** (`thinking: {type: "adaptive"}`) guided by the **effort parameter** (`output_config.effort`), with five levels: `low | medium | high (default) | xhigh | max`. Manual `budget_tokens` is rejected on Opus 4.8 / Sonnet 5 / Fable 5. The wrapper maps the OpenAI-side `reasoning_effort` straight onto that ladder:
-
-1. **`reasoning_effort`** — `low|medium|high|xhigh|max` pass through as `output_config.effort` with `thinking: adaptive`; `off` (also `minimal`/`none`) disables thinking where the model allows it. Overrides any alias default.
-2. **`-thinking` model aliases** in `/v1/models` (OpenRouter/Gemini-style variant ids) for clients that can't send `reasoning_effort`: the alias enables adaptive thinking at the default `high` effort.
+Current Claude models use **adaptive thinking** (`thinking: {type: "adaptive"}`) guided by the **effort parameter** (`output_config.effort`), with five levels: `low | medium | high (default) | xhigh | max`. Manual `budget_tokens` is rejected on Opus 4.8 / Sonnet 5 / Fable 5. The wrapper maps the OpenAI-standard **`reasoning_effort`** parameter straight onto that ladder: `low|medium|high|xhigh|max` pass through as `output_config.effort` with `thinking: adaptive`; `off` (also `minimal`/`none`) disables thinking where the model allows it.
 
 Per-model semantics (configurable):
 
@@ -99,7 +96,7 @@ Per-model semantics (configurable):
 | `DEFAULT_MODEL` | `claude-sonnet-5` | used when a request omits the model |
 | `DEFAULT_MAX_TOKENS` | `8192` | injected when the client omits `max_tokens` |
 | `ENABLE_WEB_SEARCH` | `false` | add Anthropic's server-side `web_search` tool to every request |
-| `THINKING_MODELS` | `claude-fable-5,claude-opus-4-8,claude-sonnet-5` | models supporting adaptive thinking (get a `-thinking` alias and honor `reasoning_effort`) |
+| `THINKING_MODELS` | `claude-fable-5,claude-opus-4-8,claude-sonnet-5` | models supporting adaptive thinking (honor `reasoning_effort`) |
 | `THINKING_ALWAYS_ON_MODELS` | `claude-fable-5` | models that reject disabling thinking (`off` ignored) |
 | `THINKING_DEFAULT_ON_MODELS` | `claude-sonnet-5` | models that think unless explicitly disabled |
 | `THINKING_DISPLAY` | `summarized` | `thinking.display`: `summarized` streams readable thinking, `omitted` hides it |

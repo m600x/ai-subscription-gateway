@@ -25,8 +25,7 @@ type Config struct {
 	DefaultMaxTokens  int
 	EnableWebSearch   bool
 	// ThinkingModels accept adaptive thinking guided by the effort ladder
-	// (low|medium|high|xhigh|max). They get a "-thinking" alias in
-	// /v1/models (OpenRouter-style variant id) and honor reasoning_effort.
+	// (low|medium|high|xhigh|max) via the reasoning_effort parameter.
 	ThinkingModels []string
 	// ThinkingAlwaysOnModels cannot disable thinking (thinking.type
 	// "disabled" is rejected); an "off" effort is silently ignored.
@@ -97,8 +96,8 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// IsThinkingModel reports whether the base model supports adaptive thinking
-// (and therefore gets a -thinking alias and honors reasoning_effort).
+// IsThinkingModel reports whether the model supports adaptive thinking (and
+// therefore honors reasoning_effort).
 func (c *Config) IsThinkingModel(model string) bool {
 	return contains(c.ThinkingModels, model)
 }
@@ -112,19 +111,6 @@ func (c *Config) IsThinkingAlwaysOn(model string) bool {
 // thinking config (so "off" must send an explicit disable).
 func (c *Config) IsThinkingDefaultOn(model string) bool {
 	return contains(c.ThinkingDefaultOnModels, model)
-}
-
-// AdvertisedModels returns the /v1/models list: every configured model, plus
-// a "-thinking" alias for each thinking-capable one.
-func (c *Config) AdvertisedModels() []string {
-	out := make([]string, 0, len(c.Models))
-	for _, m := range c.Models {
-		out = append(out, m)
-		if c.IsThinkingModel(m) {
-			out = append(out, m+"-thinking")
-		}
-	}
-	return out
 }
 
 func envStr(key, def string) string {

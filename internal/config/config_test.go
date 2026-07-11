@@ -30,27 +30,16 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-func TestAdvertisedModelsVariants(t *testing.T) {
+func TestThinkingModelRegistry(t *testing.T) {
 	c := &Config{
 		Models:         []string{"claude-fable-5", "claude-sonnet-5"},
 		ThinkingModels: []string{"claude-sonnet-5"},
 	}
-	got := c.AdvertisedModels()
-	want := []string{
-		"claude-fable-5",
-		"claude-sonnet-5",
-		"claude-sonnet-5-thinking",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("AdvertisedModels = %#v, want %#v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("AdvertisedModels[%d] = %q, want %q", i, got[i], want[i])
-		}
+	if !c.IsThinkingModel("claude-sonnet-5") {
+		t.Error("sonnet must be thinking-capable")
 	}
 	if c.IsThinkingModel("claude-fable-5") {
-		t.Error("fable must not be treated as thinking-capable")
+		t.Error("fable is not in ThinkingModels here")
 	}
 }
 
