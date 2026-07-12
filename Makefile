@@ -21,7 +21,7 @@ export PATH := $(BIN):$(PATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint lint-go lint-docker test build up down run clean
+.PHONY: help install lint lint-go lint-docker test build up down run anthropic-token openai-token clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -91,6 +91,16 @@ down: ## Stop and remove the container
 run: ## Run natively with go (reads .env)
 	@test -f .env || { echo "no .env found -- copy .env.example to .env and fill it in"; exit 1; }
 	set -a && . ./.env && set +a && go run ./cmd/server
+
+anthropic-token: ## Generate a Claude subscription token in a throwaway container
+	docker build -t $(IMAGE)-anthropic-token -f Dockerfile.anthropic-token .
+	@echo "A URL will be printed -- open it in a browser (any device), then paste the code back here."
+	docker run --rm -it $(IMAGE)-anthropic-token
+
+openai-token: ## Generate a ChatGPT/Codex refresh token in a throwaway container (headless device-code)
+	docker build --target token -t $(IMAGE)-openai-token .
+	@echo "A URL + code will be printed -- authorize on any device; the token prints when you approve."
+	docker run --rm -it $(IMAGE)-openai-token
 
 clean: ## Remove local build artifacts
 	rm -rf $(BIN) out server

@@ -74,7 +74,7 @@ func (c *Client) parseError(status int, raw []byte) *Error {
 	}
 	_ = json.Unmarshal(raw, &body)
 	if status == http.StatusUnauthorized {
-		slog.Error("ANTHROPIC 401: OAuth token expired or revoked -- regenerate with 'claude setup-token' and update the ANTHROPIC_OAUTH_TOKEN secret")
+		slog.Error("ANTHROPIC 401: OAuth token expired or revoked -- regenerate with 'claude setup-token' and update the ANTHROPIC_TOKEN secret")
 	}
 	return &Error{Status: status, Type: body.Error.Type, Message: body.Error.Message}
 }

@@ -93,7 +93,7 @@ func Load() (*Config, error) {
 		DefaultModel:     os.Getenv("DEFAULT_MODEL"),
 		DefaultMaxTokens: envInt("DEFAULT_MAX_TOKENS", 8192),
 
-		OAuthToken:        os.Getenv("ANTHROPIC_OAUTH_TOKEN"),
+		OAuthToken:        os.Getenv("ANTHROPIC_TOKEN"),
 		AnthropicBaseURL:  strings.TrimRight(envStr("ANTHROPIC_BASE_URL", defaultAnthropicBaseURL), "/"),
 		AnthropicVersion:  envStr("ANTHROPIC_VERSION", "2023-06-01"),
 		AnthropicBeta:     envStr("ANTHROPIC_BETA", "oauth-2025-04-20"),
@@ -102,7 +102,7 @@ func Load() (*Config, error) {
 		EnableWebSearch:   envBool("ENABLE_WEB_SEARCH", false),
 		ThinkingDisplay:   envStr("THINKING_DISPLAY", "summarized"),
 
-		OpenAIRefreshToken:     os.Getenv("OPENAI_REFRESH_TOKEN"),
+		OpenAIRefreshToken:     os.Getenv("OPENAI_TOKEN"),
 		OpenAIAccessToken:      os.Getenv("OPENAI_ACCESS_TOKEN"),
 		OpenAIAccountID:        os.Getenv("OPENAI_ACCOUNT_ID"),
 		OpenAIBaseURL:          strings.TrimRight(envStr("OPENAI_BASE_URL", defaultOpenAIBaseURL), "/"),
@@ -124,7 +124,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("CLIENT_API_KEY is required")
 	}
 	if !c.AnthropicEnabled() && !c.OpenAIEnabled() {
-		return nil, fmt.Errorf("no provider configured: set ANTHROPIC_OAUTH_TOKEN and/or OPENAI_REFRESH_TOKEN")
+		return nil, fmt.Errorf("no provider configured: set ANTHROPIC_TOKEN and/or OPENAI_TOKEN")
 	}
 	if c.AnthropicEnabled() && c.SpoofSystemPrompt == "" {
 		return nil, fmt.Errorf("SPOOF_SYSTEM_PROMPT must not be empty (it is the Anthropic auth gate)")

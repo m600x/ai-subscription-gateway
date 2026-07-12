@@ -10,6 +10,13 @@ COPY . .
 # (distroless has no shell to mkdir/chown), made writable by the non-root user.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server && mkdir -p /data
 
+# Token-generation image (built with `--target token`): entrypoint is the
+# headless device-code login, so `docker run --rm -it <img>` prints a URL + code
+# to authorize on any device and then prints the OpenAI refresh token.
+FROM gcr.io/distroless/static-debian12:nonroot AS token
+COPY --from=build /out/server /server
+ENTRYPOINT ["/server", "login"]
+
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 # /app stays root-owned (read-only to the app) so the binary and registry

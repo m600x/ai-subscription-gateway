@@ -1,0 +1,13 @@
+# syntax=docker/dockerfile:1
+#
+# Throwaway image that generates a Claude subscription token. Entrypoint is
+# `claude setup-token`: it prints a URL to authorize in a browser on any device;
+# because the container can't receive the OAuth callback it falls back to a
+# copy-paste code flow, so run it interactively (`docker run --rm -it`) and
+# paste the code back. On success it prints the sk-ant-oat01-… token.
+FROM node:22-alpine
+
+# hadolint ignore=DL3016
+RUN npm install -g @anthropic-ai/claude-code --no-fund --no-audit
+
+ENTRYPOINT ["claude", "setup-token"]

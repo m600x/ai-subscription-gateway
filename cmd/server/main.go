@@ -179,7 +179,7 @@ func runLogin() {
 		os.Exit(1)
 	}
 	fmt.Print("\nLogin successful. Set this in your environment to serve OpenAI/Codex models:\n\n")
-	fmt.Printf("  OPENAI_REFRESH_TOKEN=%s\n", res.RefreshToken)
+	fmt.Printf("  OPENAI_TOKEN=%s\n", res.RefreshToken)
 	if res.AccountID != "" {
 		fmt.Printf("\n(account id: %s)\n", res.AccountID)
 	}

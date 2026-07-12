@@ -2,58 +2,17 @@ package codex
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/m600x/ai-subscription-gateway/internal/config"
 )
-
-func TestGeneratePKCE(t *testing.T) {
-	pk, err := generatePKCE()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pk.verifier == "" || pk.challenge == "" {
-		t.Fatal("empty pkce")
-	}
-	sum := sha256.Sum256([]byte(pk.verifier))
-	want := base64.RawURLEncoding.EncodeToString(sum[:])
-	if pk.challenge != want {
-		t.Errorf("challenge is not S256(verifier)")
-	}
-}
-
-func TestAuthorizeURL(t *testing.T) {
-	raw := authorizeURL("https://auth.openai.com", "cid", "http://localhost:1455/auth/callback", "codex_cli_rs", "chal", "st8")
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := u.Query()
-	checks := map[string]string{
-		"response_type":             "code",
-		"client_id":                 "cid",
-		"code_challenge":            "chal",
-		"code_challenge_method":     "S256",
-		"state":                     "st8",
-		"originator":                "codex_cli_rs",
-		"codex_cli_simplified_flow": "true",
-	}
-	for k, want := range checks {
-		if q.Get(k) != want {
-			t.Errorf("param %s = %q, want %q", k, q.Get(k), want)
-		}
-	}
-	if !strings.Contains(q.Get("scope"), "offline_access") {
-		t.Errorf("scope missing offline_access: %q", q.Get("scope"))
-	}
-}
 
 func TestExchangeCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +29,7 @@ func TestExchangeCode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr, err := exchangeCode(context.Background(), srv.Client(), srv.URL, "cid", "http://localhost/cb", "verifier", "the-code")
+	tr, err := exchangeCode(context.Background(), srv.Client(), srv.URL, "cid", srv.URL+"/deviceauth/callback", "verifier", "the-code")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,88 +38,93 @@ func TestExchangeCode(t *testing.T) {
 	}
 }
 
-// authCodeIssuer mocks the OAuth token endpoint for the authorization_code
-// grant, returning the given refresh token and an id_token carrying acc_1.
-func authCodeIssuer(t *testing.T, refresh string) *httptest.Server {
+// deviceIssuer mocks the device-code endpoints. tokenStatus is served by the
+// poll endpoint for the first (pendingRounds) polls (e.g. 404), then it returns
+// the authorization code + verifier; /oauth/token returns the tokens.
+func deviceIssuer(t *testing.T, pendingRounds int32, refresh string) (*httptest.Server, *int32) {
 	t.Helper()
+	var polls int32
 	idTok := makeJWT(map[string]any{
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acc_1"},
 	})
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		if r.FormValue("grant_type") != "authorization_code" || r.FormValue("code") == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			io.WriteString(w, `{"error":"bad_request"}`)
-			return
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/api/accounts/deviceauth/usercode"):
+			// interval as a quoted string, matching the real endpoint.
+			io.WriteString(w, `{"device_auth_id":"dev-1","user_code":"WXYZ-1234","interval":"0"}`)
+		case strings.HasSuffix(r.URL.Path, "/api/accounts/deviceauth/token"):
+			if atomic.AddInt32(&polls, 1) <= pendingRounds {
+				w.WriteHeader(http.StatusNotFound) // not authorized yet
+				return
+			}
+			io.WriteString(w, `{"authorization_code":"auth-code","code_verifier":"verifier-xyz"}`)
+		case strings.HasSuffix(r.URL.Path, "/oauth/token"):
+			raw, _ := io.ReadAll(r.Body)
+			form, _ := url.ParseQuery(string(raw))
+			if form.Get("code") != "auth-code" || form.Get("code_verifier") != "verifier-xyz" {
+				t.Errorf("exchange form = %v", form)
+			}
+			io.WriteString(w, `{"access_token":"at","id_token":"`+idTok+`","refresh_token":"`+refresh+`"}`)
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
 		}
-		io.WriteString(w, `{"access_token":"at","id_token":"`+idTok+`","refresh_token":"`+refresh+`","expires_in":3600}`)
 	}))
+	return srv, &polls
 }
 
-// fakeBrowser returns an `open` hook that reads the authorize URL and drives
-// the local callback with the given code and (optionally overridden) state.
-func fakeBrowser(code, stateOverride string) func(string) {
-	return func(authURL string) {
-		u, err := url.Parse(authURL)
-		if err != nil {
+func noSleep(time.Duration) {}
+func noPrompt(_, _ string)  {}
+
+func TestDeviceLoginSuccessAfterPolling(t *testing.T) {
+	srv, polls := deviceIssuer(t, 2, "rt-device") // pending twice, then authorized
+	defer srv.Close()
+	cfg := &config.Config{OpenAIAuthIssuer: srv.URL, OpenAIClientID: "cid", OpenAIOriginator: "codex_cli_rs"}
+
+	var gotURL, gotCode string
+	res, err := deviceLogin(context.Background(), cfg, srv.Client(), noSleep,
+		func(u, c string) { gotURL, gotCode = u, c })
+	if err != nil {
+		t.Fatalf("deviceLogin: %v", err)
+	}
+	if res.RefreshToken != "rt-device" || res.AccountID != "acc_1" {
+		t.Errorf("result = %+v", res)
+	}
+	if gotURL != srv.URL+"/codex/device" || gotCode != "WXYZ-1234" {
+		t.Errorf("prompt url=%q code=%q", gotURL, gotCode)
+	}
+	if atomic.LoadInt32(polls) != 3 {
+		t.Errorf("polls = %d, want 3 (2 pending + 1 success)", *polls)
+	}
+}
+
+func TestDeviceLoginUsercodeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, `{"error":"boom"}`)
+	}))
+	defer srv.Close()
+	cfg := &config.Config{OpenAIAuthIssuer: srv.URL, OpenAIClientID: "cid"}
+
+	if _, err := deviceLogin(context.Background(), cfg, srv.Client(), noSleep, noPrompt); err == nil {
+		t.Fatal("expected an error when the usercode request fails")
+	}
+}
+
+func TestDeviceLoginContextCanceled(t *testing.T) {
+	// usercode succeeds; the token endpoint stays pending; the sleep cancels the
+	// context so the poll loop exits with the context error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/usercode") {
+			io.WriteString(w, `{"device_auth_id":"d","user_code":"C","interval":0}`)
 			return
 		}
-		q := u.Query()
-		state := q.Get("state")
-		if stateOverride != "" {
-			state = stateOverride
-		}
-		resp, err := http.Get(q.Get("redirect_uri") + "?code=" + url.QueryEscape(code) + "&state=" + url.QueryEscape(state))
-		if err == nil {
-			_ = resp.Body.Close()
-		}
-	}
-}
+		w.WriteHeader(http.StatusNotFound) // always pending
+	}))
+	defer srv.Close()
+	cfg := &config.Config{OpenAIAuthIssuer: srv.URL, OpenAIClientID: "cid"}
 
-func TestLoginSuccess(t *testing.T) {
-	issuer := authCodeIssuer(t, "rt-login")
-	defer issuer.Close()
-	cfg := &config.Config{OpenAIAuthIssuer: issuer.URL, OpenAIClientID: "cid", OpenAIOriginator: "codex_cli_rs"}
-
-	res, err := login(context.Background(), cfg, 0, fakeBrowser("the-code", ""))
-	if err != nil {
-		t.Fatalf("login: %v", err)
-	}
-	if res.RefreshToken != "rt-login" {
-		t.Errorf("RefreshToken = %q, want rt-login", res.RefreshToken)
-	}
-	if res.AccountID != "acc_1" {
-		t.Errorf("AccountID = %q, want acc_1 (from id_token)", res.AccountID)
-	}
-}
-
-func TestLoginStateMismatch(t *testing.T) {
-	issuer := authCodeIssuer(t, "rt")
-	defer issuer.Close()
-	cfg := &config.Config{OpenAIAuthIssuer: issuer.URL, OpenAIClientID: "cid"}
-
-	_, err := login(context.Background(), cfg, 0, fakeBrowser("the-code", "WRONG-STATE"))
-	if err == nil || !strings.Contains(err.Error(), "state mismatch") {
-		t.Fatalf("want a state-mismatch error, got %v", err)
-	}
-}
-
-func TestLoginMissingCode(t *testing.T) {
-	issuer := authCodeIssuer(t, "rt")
-	defer issuer.Close()
-	cfg := &config.Config{OpenAIAuthIssuer: issuer.URL, OpenAIClientID: "cid"}
-
-	_, err := login(context.Background(), cfg, 0, fakeBrowser("", ""))
-	if err == nil || !strings.Contains(err.Error(), "authorization code") {
-		t.Fatalf("want a missing-code error, got %v", err)
-	}
-}
-
-func TestLoginContextCanceled(t *testing.T) {
-	cfg := &config.Config{OpenAIAuthIssuer: "http://127.0.0.1:9", OpenAIClientID: "cid"}
 	ctx, cancel := context.WithCancel(context.Background())
-	// The "browser" never completes the callback; cancel the context instead.
-	_, err := login(ctx, cfg, 0, func(string) { cancel() })
+	_, err := deviceLogin(ctx, cfg, srv.Client(), func(time.Duration) { cancel() }, noPrompt)
 	if err == nil {
 		t.Fatal("expected a context-cancellation error")
 	}

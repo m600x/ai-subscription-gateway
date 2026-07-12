@@ -50,6 +50,13 @@ jobs:
         with:
           dockerfile: Dockerfile
 
+      - name: hadolint (Dockerfile.anthropic-token)
+        id: hadolint_anthropic
+        continue-on-error: true
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.anthropic-token
+
       - name: Job summary
         if: always()
         run: |
@@ -62,6 +69,7 @@ jobs:
             echo "| go vet | ${{ steps.vet.outcome }} |"
             echo "| golangci-lint | ${{ steps.golangci.outcome }} |"
             echo "| hadolint | ${{ steps.hadolint.outcome }} |"
+            echo "| hadolint (anthropic-token) | ${{ steps.hadolint_anthropic.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail if any check failed
@@ -126,6 +134,26 @@ jobs:
           name: image-oci
           path: /tmp/image-oci.tar
           retention-days: 1
+
+      # Verify the token-generation images build too (no push, single-arch is
+      # enough to catch breakage).
+      - name: Build OpenAI token image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: token
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE }}-openai-token:latest
+          push: false
+
+      - name: Build Anthropic token image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.anthropic-token
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE }}-anthropic-token:latest
+          push: false
 
       - name: Job summary
         if: always()

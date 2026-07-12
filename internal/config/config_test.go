@@ -4,7 +4,7 @@ import "testing"
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("CLIENT_API_KEY", "ck")
-	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "tok")
+	t.Setenv("ANTHROPIC_TOKEN", "tok")
 
 	c, err := Load()
 	if err != nil {
@@ -46,7 +46,7 @@ func TestLoadReadsModelsInline(t *testing.T) {
 	// MODELS is captured verbatim (config doesn't parse it; the registry does).
 	const raw = `{"models":[{"id":"x","provider":"openai","reasoning":{"efforts":["low"],"default":"low"}}]}`
 	t.Setenv("CLIENT_API_KEY", "ck")
-	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "tok")
+	t.Setenv("ANTHROPIC_TOKEN", "tok")
 	t.Setenv("MODELS", raw)
 
 	c, err := Load()
@@ -60,7 +60,7 @@ func TestLoadReadsModelsInline(t *testing.T) {
 
 func TestLoadStatelessOverride(t *testing.T) {
 	t.Setenv("CLIENT_API_KEY", "ck")
-	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "tok")
+	t.Setenv("ANTHROPIC_TOKEN", "tok")
 	t.Setenv("STATELESS", "false")
 	t.Setenv("TOKENS_FILE", "/data/tokens.json")
 
@@ -93,8 +93,8 @@ func TestProviderEnablement(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CLIENT_API_KEY", "ck")
-			t.Setenv("ANTHROPIC_OAUTH_TOKEN", tc.anthropicTok)
-			t.Setenv("OPENAI_REFRESH_TOKEN", tc.openaiRefresh)
+			t.Setenv("ANTHROPIC_TOKEN", tc.anthropicTok)
+			t.Setenv("OPENAI_TOKEN", tc.openaiRefresh)
 
 			c, err := Load()
 			if tc.wantErr {
@@ -122,7 +122,7 @@ func TestProviderEnablement(t *testing.T) {
 
 func TestLoadRequiresClientKey(t *testing.T) {
 	t.Setenv("CLIENT_API_KEY", "")
-	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "tok")
+	t.Setenv("ANTHROPIC_TOKEN", "tok")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error when CLIENT_API_KEY is missing")
 	}
@@ -130,7 +130,7 @@ func TestLoadRequiresClientKey(t *testing.T) {
 
 func TestLoadOverrides(t *testing.T) {
 	t.Setenv("CLIENT_API_KEY", "ck")
-	t.Setenv("OPENAI_REFRESH_TOKEN", "rt")
+	t.Setenv("OPENAI_TOKEN", "rt")
 	t.Setenv("PORT", "9000")
 	t.Setenv("ENABLE_WEB_SEARCH", "true")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://example.test/")

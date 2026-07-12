@@ -68,10 +68,10 @@ func (tm *TokenManager) Prime(ctx context.Context) error {
 		return tm.refreshLocked(ctx)
 	}
 	if tm.access == "" {
-		return fmt.Errorf("no OpenAI credentials: set OPENAI_REFRESH_TOKEN")
+		return fmt.Errorf("no OpenAI credentials: set OPENAI_TOKEN")
 	}
 	if tm.account == "" {
-		return fmt.Errorf("OPENAI_ACCESS_TOKEN given without a derivable account id; set OPENAI_ACCOUNT_ID or use OPENAI_REFRESH_TOKEN")
+		return fmt.Errorf("OPENAI_ACCESS_TOKEN given without a derivable account id; set OPENAI_ACCOUNT_ID or use OPENAI_TOKEN")
 	}
 	return nil
 }
@@ -99,7 +99,7 @@ func (tm *TokenManager) ForceRefresh(ctx context.Context) (access, account strin
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	if tm.refresh == "" {
-		return tm.access, tm.account, fmt.Errorf("cannot refresh: no OPENAI_REFRESH_TOKEN")
+		return tm.access, tm.account, fmt.Errorf("cannot refresh: no OPENAI_TOKEN")
 	}
 	if err := tm.refreshLocked(ctx); err != nil {
 		return "", "", err
@@ -162,7 +162,7 @@ func (tm *TokenManager) tryRefresh(ctx context.Context, refreshTok string) error
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		slog.Error("OPENAI token refresh failed: the refresh token is expired or revoked -- re-run 'server login' and update OPENAI_REFRESH_TOKEN",
+		slog.Error("OPENAI token refresh failed: the refresh token is expired or revoked -- re-run 'server login' and update OPENAI_TOKEN",
 			"status", resp.StatusCode)
 		return &Error{Status: resp.StatusCode, Type: "auth_error", Message: "openai token refresh failed: " + string(raw)}
 	}

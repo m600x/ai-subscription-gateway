@@ -4,10 +4,10 @@
 Want to use your **Claude** (Pro/Max/Enterprise) or **ChatGPT/Codex** (Plus/Pro/Enterprise) subscription in Open WebUI through a single OpenAI-compatible endpoint?
 
 ```bash
-# Claude: generate a token (valid ~1 year)
-claude setup-token
-# ChatGPT/Codex: log in and get a refresh token (opens a browser; run on your machine)
-go run ./cmd/server login
+# Anthropic        (or: claude setup-token)
+make anthropic-token
+# OpenAI           (or: go run ./cmd/server login)
+make openai-token
 
 # Generate a random access key clients will present
 openssl rand -hex 32
@@ -15,8 +15,8 @@ openssl rand -hex 32
 # Run the wrapper (configure whichever provider(s) you have)
 docker run -d -p 8000:8000 \
   -e CLIENT_API_KEY=YOUR_ACCESS_KEY \
-  -e ANTHROPIC_OAUTH_TOKEN=YOUR_CLAUDE_TOKEN \
-  -e OPENAI_REFRESH_TOKEN=YOUR_CODEX_REFRESH_TOKEN \
+  -e ANTHROPIC_TOKEN=YOUR_CLAUDE_TOKEN \
+  -e OPENAI_TOKEN=YOUR_CODEX_REFRESH_TOKEN \
   --name ai-subscription-gateway \
   ghcr.io/m600x/ai-subscription-gateway:latest
 
@@ -45,8 +45,8 @@ A provider is enabled **only if its credentials are present**, and requests are 
 
 | Provider | Enable with | Upstream | Auth |
 | --- | --- | --- | --- |
-| Anthropic (Claude) | `ANTHROPIC_OAUTH_TOKEN` | `api.anthropic.com/v1/messages` | 1-year static token (`claude setup-token`) |
-| OpenAI (Codex) | `OPENAI_REFRESH_TOKEN` | `chatgpt.com/backend-api/codex/responses` | ChatGPT OAuth (short-lived access token auto-refreshed from a refresh token) |
+| Anthropic (Claude) | `ANTHROPIC_TOKEN` | `api.anthropic.com/v1/messages` | 1-year static token (`claude setup-token`) |
+| OpenAI (Codex) | `OPENAI_TOKEN` | `chatgpt.com/backend-api/codex/responses` | ChatGPT OAuth (short-lived access token auto-refreshed from a refresh token) |
 
 - Only one configured → the other is silently disabled: its models don't appear in `/v1/models` and are rejected with a clear error.
 - Neither configured → the server refuses to start.
@@ -109,15 +109,33 @@ Send the OpenAI-standard **`reasoning_effort`** (`low|medium|high|xhigh|max`, pl
 ## The tokens: generate, rotate, TTLs
 
 - **Claude** — `claude setup-token` prints `sk-xxx-oat01-…`, valid **~1 year, no auto-renew**. On expiry every request 401s; the wrapper logs a loud regenerate line. Set a reminder ~11 months out.
-- **Codex** — `server login` runs a browser OAuth (PKCE) flow and prints a **refresh token**. Set it as `OPENAI_REFRESH_TOKEN`; the wrapper refreshes the access token itself. If the refresh token is revoked, re-run `server login`.
+- **Codex** — `server login` runs a **headless device-code flow**: it prints a URL and a short code; open the URL on any device, enter the code, and once you approve it prints a **refresh token**. Set it as `OPENAI_TOKEN`; the wrapper refreshes the access token itself. If the refresh token is revoked, re-run `server login`. No local callback server, no browser on the same host — works in containers and over SSH.
+
+### Generating tokens without a local toolchain
+
+If you don't want Node or a Go build on your machine, generate either token in a throwaway Docker container (the container's entrypoint is the token command; `--rm` leaves nothing behind):
+
+```bash
+make anthropic-token   # runs `claude setup-token`: open the printed URL, paste the code back
+make openai-token      # runs the device-code login: open the printed URL, enter the code
+```
+
+Copy the printed token into your deployment's env (`ANTHROPIC_TOKEN` / `OPENAI_TOKEN`).
 
 ## Configuration
+
+### Primary
 
 | Env | Default | Purpose |
 | --- | --- | --- |
 | `CLIENT_API_KEY` | *(required)* | key clients present to this wrapper |
-| `ANTHROPIC_OAUTH_TOKEN` | — | enables Claude; `sk-xxx-oat01-…` from `claude setup-token` |
-| `OPENAI_REFRESH_TOKEN` | — | enables Codex; from `server login` |
+| `ANTHROPIC_TOKEN` | — | enables Claude; `sk-xxx-oat01-…` from `claude setup-token` |
+| `OPENAI_TOKEN` | — | enables Codex; from `server login` |
+
+### Optional
+
+| Env | Default | Purpose |
+| --- | --- | --- |
 | `MODELS` | — | inline registry JSON; overrides the file, falls back to it if invalid |
 | `MODELS_CONFIG` | `models.json` | path to the model registry file |
 | `DEFAULT_MODEL` | *(first enabled)* | used when a request omits the model |
@@ -157,7 +175,7 @@ OpenAI refresh token, and it is rewritten on every rotation.
 **Precedence on restart (non-stateless):** the file wins.
 
 - **OpenAI refresh token** — the persisted (file) value takes priority over
-  `OPENAI_REFRESH_TOKEN`. Over the gateway's life the token rotates and the env
+  `OPENAI_TOKEN`. Over the gateway's life the token rotates and the env
   var goes obsolete, so on a pod/host restart the file's latest token is used,
   not the stale env one. The env value is kept only as a fallback (tried if the
   file token is rejected, e.g. after a deliberate re-login). If the file has a
@@ -182,8 +200,8 @@ shadows the fresh one on disk.
 docker build -t ai-subscription-gateway .
 docker run -d -p 8000:8000 \
   -e CLIENT_API_KEY=your-client-key \
-  -e ANTHROPIC_OAUTH_TOKEN=sk-xxx-oat01-... \
-  -e OPENAI_REFRESH_TOKEN=... \
+  -e ANTHROPIC_TOKEN=sk-xxx-oat01-... \
+  -e OPENAI_TOKEN=... \
   --name ai-subscription-gateway \
   ai-subscription-gateway
 ```
