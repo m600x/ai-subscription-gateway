@@ -9,8 +9,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 
-	"github.com/m600x/ai-substation/internal/openai"
-	"github.com/m600x/ai-substation/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/openai"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
 )
 
 // NewID returns a fresh OpenAI-style completion id ("chatcmpl-…").

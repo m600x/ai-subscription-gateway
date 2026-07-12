@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
 )
 
 // Client talks to the ChatGPT Codex Responses API with a subscription OAuth

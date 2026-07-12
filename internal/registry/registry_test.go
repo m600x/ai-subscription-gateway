@@ -86,3 +86,87 @@ func TestLoadRejectsBadProvider(t *testing.T) {
 		t.Error("expected error for unknown provider")
 	}
 }
+
+func TestParseRejectsInvalid(t *testing.T) {
+	cases := map[string]string{
+		"not json":      `{nope`,
+		"no models key": `{"foo":1}`,
+		"empty models":  `{"models":[]}`,
+		"empty id":      `{"models":[{"id":"","provider":"openai"}]}`,
+		"bad provider":  `{"models":[{"id":"x","provider":"aws"}]}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(body)); err == nil {
+				t.Errorf("expected Parse to reject %s", name)
+			}
+		})
+	}
+}
+
+func TestParseAcceptsMinimalCompleteModel(t *testing.T) {
+	reg, err := Parse([]byte(`{"models":[{"id":"gpt-5.6-sol","provider":"openai","reasoning":{"efforts":["low","high"],"default":"low"}}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if reg.Len() != 1 {
+		t.Fatalf("len = %d", reg.Len())
+	}
+	if m, ok := reg.Lookup("gpt-5.6-sol"); !ok || m.UpstreamID != "gpt-5.6-sol" {
+		t.Errorf("lookup/upstream default failed: %+v ok=%v", m, ok)
+	}
+}
+
+func TestResolvePrefersInlineWhenValid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	_ = os.WriteFile(path, []byte(sample), 0o600) // file has sonnet + gpt-5-codex
+	inline := `{"models":[{"id":"only-inline","provider":"openai","reasoning":{"efforts":["low"],"default":"low"}}]}`
+
+	reg, src, err := Resolve(inline, path)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if src.Name != "MODELS env" || src.Warning != nil {
+		t.Errorf("source = %+v, want MODELS env, no warning", src)
+	}
+	if _, ok := reg.Lookup("only-inline"); !ok {
+		t.Error("inline registry not used")
+	}
+	if _, ok := reg.Lookup("claude-sonnet-5"); ok {
+		t.Error("file registry should have been ignored")
+	}
+}
+
+func TestResolveFallsBackOnInvalidInline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	_ = os.WriteFile(path, []byte(sample), 0o600)
+
+	reg, src, err := Resolve(`{"models":[{"id":"x","provider":"aws"}]}`, path)
+	if err != nil {
+		t.Fatalf("Resolve should fall back, not fail: %v", err)
+	}
+	if src.Name != path {
+		t.Errorf("source = %q, want the file path (fallback)", src.Name)
+	}
+	if src.Warning == nil {
+		t.Error("expected a warning explaining why inline was ignored")
+	}
+	if _, ok := reg.Lookup("claude-sonnet-5"); !ok {
+		t.Error("should have fallen back to the file registry")
+	}
+}
+
+func TestResolveEmptyInlineUsesFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	_ = os.WriteFile(path, []byte(sample), 0o600)
+	reg, src, err := Resolve("   ", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.Name != path || src.Warning != nil {
+		t.Errorf("blank inline should quietly use the file; got %+v", src)
+	}
+	if reg.Len() != 2 {
+		t.Errorf("len = %d, want 2", reg.Len())
+	}
+}

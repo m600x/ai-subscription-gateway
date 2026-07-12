@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
 )
 
 func testConfig(url string) *config.Config {

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/config"
-	"github.com/m600x/ai-substation/internal/openai"
-	"github.com/m600x/ai-substation/internal/provider"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/openai"
+	"github.com/m600x/ai-subscription-gateway/internal/provider"
 )
 
 // StreamResponse reads the Anthropic SSE stream from r and writes translated

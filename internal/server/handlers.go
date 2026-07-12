@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/openai"
-	"github.com/m600x/ai-substation/internal/provider"
-	"github.com/m600x/ai-substation/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/openai"
+	"github.com/m600x/ai-subscription-gateway/internal/provider"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

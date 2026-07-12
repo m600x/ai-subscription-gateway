@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/config"
-	"github.com/m600x/ai-substation/internal/openai"
-	"github.com/m600x/ai-substation/internal/provider"
-	"github.com/m600x/ai-substation/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/openai"
+	"github.com/m600x/ai-subscription-gateway/internal/provider"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
 )
 
 // buildRequest maps an OpenAI chat-completions request onto a Responses API

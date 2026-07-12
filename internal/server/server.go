@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/m600x/ai-substation/internal/config"
-	"github.com/m600x/ai-substation/internal/provider"
-	"github.com/m600x/ai-substation/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/provider"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
 )
 
 // Server holds dependencies and the route mux.

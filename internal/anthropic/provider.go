@@ -3,10 +3,10 @@ package anthropic
 import (
 	"context"
 
-	"github.com/m600x/ai-substation/internal/config"
-	"github.com/m600x/ai-substation/internal/openai"
-	"github.com/m600x/ai-substation/internal/provider"
-	"github.com/m600x/ai-substation/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/openai"
+	"github.com/m600x/ai-subscription-gateway/internal/provider"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
 )
 
 // Provider adapts the Anthropic Messages API to the provider.Provider

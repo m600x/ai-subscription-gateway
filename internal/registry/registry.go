@@ -74,23 +74,36 @@ func Load(path string) (*Registry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading models config %q: %w", path, err)
 	}
+	reg, err := Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("models config %q: %w", path, err)
+	}
+	return reg, nil
+}
+
+// Parse validates a registry JSON document. It requires valid JSON with a
+// "models" array holding at least one complete model (non-empty id, a known
+// provider). Every listed model must be valid -- a malformed entry rejects the
+// whole document.
+func Parse(raw []byte) (*Registry, error) {
 	var f file
 	if err := json.Unmarshal(raw, &f); err != nil {
-		return nil, fmt.Errorf("parsing models config %q: %w", path, err)
+		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 	if len(f.Models) == 0 {
-		return nil, fmt.Errorf("models config %q defines no models", path)
+		return nil, fmt.Errorf("defines no models")
 	}
 
 	reg := &Registry{byName: make(map[string]int)}
 	for _, m := range f.Models {
 		if strings.TrimSpace(m.ID) == "" {
-			return nil, fmt.Errorf("models config has an entry with an empty id")
+			return nil, fmt.Errorf("an entry has an empty id")
 		}
 		switch m.Provider {
 		case ProviderAnthropic, ProviderOpenAI:
 		default:
-			return nil, fmt.Errorf("model %q has unknown provider %q", m.ID, m.Provider)
+			return nil, fmt.Errorf("model %q has unknown provider %q (want %q or %q)",
+				m.ID, m.Provider, ProviderAnthropic, ProviderOpenAI)
 		}
 		if m.UpstreamID == "" {
 			m.UpstreamID = m.ID
@@ -104,6 +117,36 @@ func Load(path string) (*Registry, error) {
 	}
 	return reg, nil
 }
+
+// Source describes where a resolved registry came from, plus a non-fatal
+// warning when inline content was provided but rejected (so it fell back).
+type Source struct {
+	Name    string // "MODELS env" or the file path
+	Warning error  // why inline was ignored, if applicable
+}
+
+// Resolve loads the registry, preferring inline JSON (the MODELS env) over the
+// file at path. If inline is set but invalid, it is ignored (the reason is
+// returned as Source.Warning) and the file is used instead -- so a bad MODELS
+// value never prevents startup as long as the bundled file is valid.
+func Resolve(inline, path string) (*Registry, Source, error) {
+	var warn error
+	if strings.TrimSpace(inline) != "" {
+		if reg, err := Parse([]byte(inline)); err == nil {
+			return reg, Source{Name: "MODELS env"}, nil
+		} else {
+			warn = err
+		}
+	}
+	reg, err := Load(path)
+	if err != nil {
+		return nil, Source{Warning: warn}, err
+	}
+	return reg, Source{Name: path, Warning: warn}, nil
+}
+
+// Len reports the number of models in the registry.
+func (r *Registry) Len() int { return len(r.models) }
 
 func (r *Registry) index(name string, idx int) {
 	key := strings.ToLower(strings.TrimSpace(name))

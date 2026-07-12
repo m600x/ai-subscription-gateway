@@ -31,6 +31,49 @@ func TestLoadDefaults(t *testing.T) {
 	if c.OpenAIBaseURL != "https://chatgpt.com/backend-api/codex" {
 		t.Errorf("OpenAIBaseURL default = %q", c.OpenAIBaseURL)
 	}
+	if !c.Stateless {
+		t.Error("Stateless should default to true")
+	}
+	if c.TokensFile != "tokens.json" {
+		t.Errorf("TokensFile default = %q", c.TokensFile)
+	}
+	if c.ModelsInline != "" {
+		t.Errorf("ModelsInline should be empty by default; got %q", c.ModelsInline)
+	}
+}
+
+func TestLoadReadsModelsInline(t *testing.T) {
+	// MODELS is captured verbatim (config doesn't parse it; the registry does).
+	const raw = `{"models":[{"id":"x","provider":"openai","reasoning":{"efforts":["low"],"default":"low"}}]}`
+	t.Setenv("CLIENT_API_KEY", "ck")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "tok")
+	t.Setenv("MODELS", raw)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ModelsInline != raw {
+		t.Errorf("ModelsInline = %q, want it captured verbatim", c.ModelsInline)
+	}
+}
+
+func TestLoadStatelessOverride(t *testing.T) {
+	t.Setenv("CLIENT_API_KEY", "ck")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "tok")
+	t.Setenv("STATELESS", "false")
+	t.Setenv("TOKENS_FILE", "/data/tokens.json")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Stateless {
+		t.Error("STATELESS=false should disable stateless mode")
+	}
+	if c.TokensFile != "/data/tokens.json" {
+		t.Errorf("TokensFile = %q", c.TokensFile)
+	}
 }
 
 func TestProviderEnablement(t *testing.T) {
@@ -68,6 +111,10 @@ func TestProviderEnablement(t *testing.T) {
 			}
 			if c.OpenAIEnabled() != tc.wantOpenAI {
 				t.Errorf("OpenAIEnabled = %v, want %v", c.OpenAIEnabled(), tc.wantOpenAI)
+			}
+			ep := c.EnabledProviders()
+			if ep["anthropic"] != tc.wantAnthropic || ep["openai"] != tc.wantOpenAI {
+				t.Errorf("EnabledProviders = %v", ep)
 			}
 		})
 	}

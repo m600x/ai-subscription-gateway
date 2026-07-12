@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
 )
 
 // Config holds all runtime settings. Secrets (ClientAPIKey, the provider
@@ -24,6 +24,10 @@ type Config struct {
 
 	// ModelsConfigPath is the path to models.json (the model registry).
 	ModelsConfigPath string
+	// ModelsInline is the raw registry JSON from the MODELS env var. When set
+	// and valid it takes priority over ModelsConfigPath (lets a deployment
+	// override the bundled registry without a rebuild or a mounted volume).
+	ModelsInline string
 	// DefaultModel is used when a request omits the model. Empty means "first
 	// model in the registry whose provider is enabled".
 	DefaultModel     string
@@ -57,6 +61,16 @@ type Config struct {
 	RequestTimeout time.Duration
 	MaxRetries     int
 	LogLevel       string
+
+	// Stateless (default true) keeps all tokens in memory only: they are read
+	// from the environment and never written to disk. The OpenAI access token
+	// is refreshed in memory, so after a long downtime a restart may find the
+	// env refresh token stale. When false, tokens are persisted to TokensFile
+	// (the Anthropic token and the rotating OpenAI refresh token) and the file
+	// is updated on each rotation, so a short restart resumes with the latest
+	// token.
+	Stateless  bool
+	TokensFile string
 }
 
 // Default endpoints / identifiers.
@@ -75,6 +89,7 @@ func Load() (*Config, error) {
 		Port:             envInt("PORT", 8000),
 		ClientAPIKey:     os.Getenv("CLIENT_API_KEY"),
 		ModelsConfigPath: envStr("MODELS_CONFIG", "models.json"),
+		ModelsInline:     os.Getenv("MODELS"),
 		DefaultModel:     os.Getenv("DEFAULT_MODEL"),
 		DefaultMaxTokens: envInt("DEFAULT_MAX_TOKENS", 8192),
 
@@ -100,6 +115,9 @@ func Load() (*Config, error) {
 		RequestTimeout: time.Duration(envInt("REQUEST_TIMEOUT_SECONDS", 600)) * time.Second,
 		MaxRetries:     envInt("MAX_RETRIES", 2),
 		LogLevel:       envStr("LOG_LEVEL", "info"),
+
+		Stateless:  envBool("STATELESS", true),
+		TokensFile: envStr("TOKENS_FILE", "tokens.json"),
 	}
 
 	if c.ClientAPIKey == "" {

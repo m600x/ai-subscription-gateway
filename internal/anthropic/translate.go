@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/config"
-	"github.com/m600x/ai-substation/internal/openai"
-	"github.com/m600x/ai-substation/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/openai"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
 )
 
 // BuildMessagesRequest maps an OpenAI request to an Anthropic MessagesRequest.

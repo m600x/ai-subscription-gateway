@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/config"
-	"github.com/m600x/ai-substation/internal/openai"
-	"github.com/m600x/ai-substation/internal/provider"
-	"github.com/m600x/ai-substation/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/openai"
+	"github.com/m600x/ai-subscription-gateway/internal/provider"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
 )
 
 // Provider adapts the ChatGPT Codex Responses API to provider.Provider.
@@ -24,6 +24,29 @@ func NewProvider(cfg *config.Config) *Provider {
 
 // Prime validates the OpenAI credentials at startup.
 func (p *Provider) Prime(ctx context.Context) error { return p.client.Prime(ctx) }
+
+// UseRefreshTokens overrides the OpenAI refresh token before Prime. primary is
+// used first (e.g. a persisted, freshly-rotated token) and fallback is tried
+// if a refresh with primary fails (e.g. the env token after a re-login). Empty
+// primary leaves the config-seeded token in place. Used in non-stateless mode.
+func (p *Provider) UseRefreshTokens(primary, fallback string) {
+	tm := p.client.tok
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if primary != "" {
+		tm.refresh = primary
+	}
+	tm.fallback = fallback
+}
+
+// SetPersist wires a callback invoked with the rotated refresh token after
+// every successful refresh (non-stateless mode).
+func (p *Provider) SetPersist(fn func(refresh string)) {
+	tm := p.client.tok
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.persist = fn
+}
 
 // Name implements provider.Provider.
 func (p *Provider) Name() string { return registry.ProviderOpenAI }

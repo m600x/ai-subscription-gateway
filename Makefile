@@ -1,18 +1,18 @@
-# ai-substation -- developer Makefile
+# ai-subscription-gateway -- developer Makefile
 #
 # Overridable variables:
-#   IMAGE / TAG        image name + tag           (default ai-substation:latest)
-#   CONTAINER          container name for up/down  (default ai-substation)
+#   IMAGE / TAG        image name + tag           (default ai-subscription-gateway:latest)
+#   CONTAINER          container name for up/down  (default ai-subscription-gateway)
 #   PORT               host port for `make up`     (default 8000)
 #   PLATFORMS          arches for `make build`     (default linux/amd64,linux/arm64)
 #   PUSH               pass PUSH=--push to push multi-arch build to a registry
 
-IMAGE     ?= ai-substation
+IMAGE     ?= ai-subscription-gateway
 TAG       ?= latest
-CONTAINER ?= ai-substation
+CONTAINER ?= ai-subscription-gateway
 PORT      ?= 8000
 PLATFORMS ?= linux/amd64,linux/arm64
-BUILDER   ?= ai-substation-multiarch
+BUILDER   ?= ai-subscription-gateway-multiarch
 PUSH      ?=
 
 BIN := $(CURDIR)/bin

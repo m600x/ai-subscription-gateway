@@ -20,12 +20,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/anthropic"
-	"github.com/m600x/ai-substation/internal/codex"
-	"github.com/m600x/ai-substation/internal/config"
-	"github.com/m600x/ai-substation/internal/provider"
-	"github.com/m600x/ai-substation/internal/registry"
-	"github.com/m600x/ai-substation/internal/server"
+	"github.com/m600x/ai-subscription-gateway/internal/anthropic"
+	"github.com/m600x/ai-subscription-gateway/internal/codex"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/provider"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/server"
+	"github.com/m600x/ai-subscription-gateway/internal/tokenstore"
 )
 
 func main() {
@@ -53,10 +54,37 @@ func runServe() {
 	}
 	setupLogging(cfg.LogLevel)
 
-	reg, err := registry.Load(cfg.ModelsConfigPath)
+	reg, src, err := registry.Resolve(cfg.ModelsInline, cfg.ModelsConfigPath)
+	if src.Warning != nil {
+		// MODELS env was set but rejected; we fell back to the file.
+		slog.Error("MODELS env is invalid; falling back to the models file", "err", src.Warning, "path", cfg.ModelsConfigPath)
+	}
 	if err != nil {
 		slog.Error("model registry error", "err", err)
 		os.Exit(1)
+	}
+	slog.Info("model registry loaded", "source", src.Name, "models", reg.Len())
+
+	// In non-stateless mode, persist tokens to disk so a short restart resumes
+	// with the latest (rotated) OpenAI refresh token. Seed the file from the
+	// environment, preferring an already-persisted OpenAI refresh token.
+	var store *tokenstore.Store
+	if !cfg.Stateless {
+		store, err = tokenstore.Open(cfg.TokensFile)
+		if err != nil {
+			slog.Error("token file error", "path", cfg.TokensFile, "err", err)
+			os.Exit(1)
+		}
+		persistedOpenAI := store.Tokens().OpenAIRefreshToken
+		openaiSeed := cfg.OpenAIRefreshToken
+		if persistedOpenAI != "" {
+			openaiSeed = persistedOpenAI
+		}
+		if err := store.Seed(cfg.OAuthToken, openaiSeed); err != nil {
+			slog.Error("failed to write token file", "path", cfg.TokensFile, "err", err)
+			os.Exit(1)
+		}
+		slog.Info("stateless disabled; persisting tokens", "path", cfg.TokensFile)
 	}
 
 	enabled := cfg.EnabledProviders()
@@ -67,6 +95,12 @@ func runServe() {
 	}
 	if cfg.OpenAIEnabled() {
 		cp := codex.NewProvider(cfg)
+		if store != nil {
+			// Prefer the persisted refresh token; fall back to the env token
+			// (covers a re-login) and persist future rotations.
+			cp.UseRefreshTokens(store.Tokens().OpenAIRefreshToken, cfg.OpenAIRefreshToken)
+			cp.SetPersist(store.SetOpenAIRefresh)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := cp.Prime(ctx); err != nil {
 			cancel()

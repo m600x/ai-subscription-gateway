@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
 )
 
 // TokenManager holds the ChatGPT OAuth credentials and refreshes the
@@ -28,6 +28,14 @@ type TokenManager struct {
 	account string
 	refresh string
 	exp     time.Time
+
+	// fallback is an alternate refresh token (e.g. the env value) tried when a
+	// refresh with the primary token fails -- lets a re-login take effect even
+	// if a persisted token has gone stale. Empty means no fallback.
+	fallback string
+	// persist, if set, is called with the (rotated) refresh token after every
+	// successful refresh so it can be written to disk (non-stateless mode).
+	persist func(refresh string)
 }
 
 // NewTokenManager seeds the manager from config. It does not perform any
@@ -112,11 +120,32 @@ func (tm *TokenManager) needsRefreshLocked() bool {
 	return time.Now().Add(5 * time.Minute).After(tm.exp)
 }
 
-// refreshLocked performs the OAuth refresh. Caller holds tm.mu.
+// refreshLocked refreshes with the primary token, falling back to the
+// alternate token if that fails, then fires the persist hook. Caller holds
+// tm.mu.
 func (tm *TokenManager) refreshLocked(ctx context.Context) error {
+	err := tm.tryRefresh(ctx, tm.refresh)
+	if err != nil && tm.fallback != "" && tm.fallback != tm.refresh {
+		slog.Warn("openai refresh with primary token failed; trying fallback token", "err", err)
+		if err2 := tm.tryRefresh(ctx, tm.fallback); err2 == nil {
+			err = nil
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if tm.persist != nil {
+		tm.persist(tm.refresh)
+	}
+	return nil
+}
+
+// tryRefresh performs one OAuth refresh with the given token; on success it
+// updates the access/refresh/account/exp fields. Caller holds tm.mu.
+func (tm *TokenManager) tryRefresh(ctx context.Context, refreshTok string) error {
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
-		"refresh_token": {tm.refresh},
+		"refresh_token": {refreshTok},
 		"client_id":     {tm.cfg.OpenAIClientID},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,

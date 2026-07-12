@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
-"""Generate models.json by scraping the vendors' PUBLIC model docs.
+"""Generate models.json by scraping the vendors' public model docs.
 
-No API keys, no account: it fetches the same public documentation pages a human
-would read, extracts the current (non-legacy/non-deprecated) models and their
-reasoning-effort ladders, and reformats them into the wrapper's models.json.
-
-    ./gen-models.py                    # -> models.json (fetches live docs)
-    ./gen-models.py models_test.json   # -> a different file (e.g. to diff)
-    SRC_ANTHROPIC=anthro.html SRC_EFFORT=eff.html SRC_OPENAI=oai.html \
-        ./gen-models.py out.json       # parse local HTML instead of fetching
+    ./gen-models.py
+    ./gen-models.py models_test.json   # -> to a different file (e.g. to diff)
 
 Because it scrapes HTML, it is inherently brittle: if a vendor restructures its
-docs, the selectors here may need updating. It is a convenience regenerator,
-not a guaranteed contract.
+docs, the selectors here may need updating. It is a convenience regenerator, no guarantee.
 """
+
 import html
 import json
 import os

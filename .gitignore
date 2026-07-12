@@ -5,3 +5,6 @@
 *.out
 .env
 .DS_Store
+# persisted credentials (STATELESS=false)
+tokens.json
+tokens.json.tmp

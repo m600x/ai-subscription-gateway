@@ -1,11 +1,12 @@
 package anthropic
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/m600x/ai-substation/internal/config"
-	"github.com/m600x/ai-substation/internal/openai"
-	"github.com/m600x/ai-substation/internal/registry"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/openai"
+	"github.com/m600x/ai-subscription-gateway/internal/registry"
 )
 
 func testCfg() *config.Config {
@@ -184,6 +185,47 @@ func TestOffOnOptInModelSendsNothing(t *testing.T) {
 	// Opus doesn't think unless asked -> no config needed to stay off.
 	if mr.Thinking != nil || mr.OutputConfig != nil {
 		t.Errorf("off on an opt-in model should send nothing; got %+v %+v", mr.Thinking, mr.OutputConfig)
+	}
+}
+
+func TestBuildChatCompletion(t *testing.T) {
+	resp := &MessagesResponse{
+		ID:    "msg_1",
+		Model: "claude-sonnet-5",
+		Role:  "assistant",
+		Content: []ContentBlock{
+			{Type: "thinking", Thinking: "hmm"}, // must be ignored in the text
+			{Type: "text", Text: "Hello "},
+			{Type: "text", Text: "world"},
+		},
+		StopReason: "max_tokens",
+		Usage:      Usage{InputTokens: 10, OutputTokens: 5},
+	}
+	cc := BuildChatCompletion(resp, "chatcmpl-1", "claude-sonnet-5")
+	if cc.Object != "chat.completion" || cc.ID != "chatcmpl-1" || cc.Model != "claude-sonnet-5" {
+		t.Errorf("envelope = %+v", cc)
+	}
+	if len(cc.Choices) != 1 || cc.Choices[0].Message == nil {
+		t.Fatalf("choices = %+v", cc.Choices)
+	}
+	if got := cc.Choices[0].Message.Content; got != "Hello world" {
+		t.Errorf("content = %q, want concatenated text only", got)
+	}
+	if fr := cc.Choices[0].FinishReason; fr == nil || *fr != "length" {
+		t.Errorf("finish_reason = %v, want length (max_tokens)", fr)
+	}
+	if cc.Usage == nil || cc.Usage.TotalTokens != 15 {
+		t.Errorf("usage = %+v", cc.Usage)
+	}
+}
+
+func TestErrorImplementsHTTPError(t *testing.T) {
+	e := &Error{Status: 401, Type: "authentication_error", Message: "bad token"}
+	if e.HTTPStatus() != 401 || e.ErrType() != "authentication_error" {
+		t.Errorf("HTTPError methods = %d/%q", e.HTTPStatus(), e.ErrType())
+	}
+	if !strings.Contains(e.Error(), "401") || !strings.Contains(e.Error(), "bad token") {
+		t.Errorf("Error() = %q", e.Error())
 	}
 }
 

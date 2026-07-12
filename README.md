@@ -1,7 +1,7 @@
-# ai-substation
-## One OpenAI-compatible endpoint in front of your Claude & Codex subscriptions
+# AI Subscription Gateway
+## An OpenAI API wrapper for your AI subscription (Anthropic and OpenAI)
 
-Want to use your **Claude** (Pro/Max) or **ChatGPT/Codex** (Plus/Pro) subscription in Open WebUI — through a single OpenAI-compatible endpoint, billed against your subscription, not per-token API keys?
+Want to use your **Claude** (Pro/Max/Enterprise) or **ChatGPT/Codex** (Plus/Pro/Enterprise) subscription in Open WebUI through a single OpenAI-compatible endpoint?
 
 ```bash
 # Claude: generate a token (valid ~1 year)
@@ -17,8 +17,8 @@ docker run -d -p 8000:8000 \
   -e CLIENT_API_KEY=YOUR_ACCESS_KEY \
   -e ANTHROPIC_OAUTH_TOKEN=YOUR_CLAUDE_TOKEN \
   -e OPENAI_REFRESH_TOKEN=YOUR_CODEX_REFRESH_TOKEN \
-  --name ai-substation \
-  ghcr.io/m600x/ai-substation:latest
+  --name ai-subscription-gateway \
+  ghcr.io/m600x/ai-subscription-gateway:latest
 
 # Point Open WebUI at it
 URL: http://localhost:8000/v1
@@ -28,11 +28,9 @@ Auth: (Bearer) YOUR_ACCESS_KEY
 ---
 ## Description
 
-A tiny, fast OpenAI-compatible API in front of **Claude** (Anthropic Messages API) and **Codex** (ChatGPT Responses API), backed by your **subscription** rather than per-token API billing. It calls each upstream **directly** over HTTP using a subscription OAuth token — no CLI subprocess, no Python, no per-request cold start.
+A tiny, fast OpenAI-compatible API in front of **Claude** (Anthropic Messages API) and **Codex** (ChatGPT Responses API), backed by your **subscription** rather than per-token API billing. It calls each upstream directly over HTTP using a subscription OAuth token, no CLI subprocess, no Python, no per-request cold start.
 
-Built for serving [Open WebUI](https://github.com/open-webui/open-webui) an internal endpoint that bills against your subscription(s).
-
-## Why this exists
+One key example of usage is in [Open WebUI](https://github.com/open-webui/open-webui).
 
 The common approach wraps a vendor CLI as a subprocess, adding process-startup latency to every request. This project talks straight to the upstream HTTP APIs:
 
@@ -60,14 +58,11 @@ A provider is enabled **only if its credentials are present**, and requests are 
 
 **Codex.** The ChatGPT backend takes a short-lived OAuth **access token** plus a `ChatGPT-Account-ID` header (a claim inside the id_token JWT), an `originator` header, and `OpenAI-Beta: responses=experimental`. Access tokens expire in ~1 hour, so the wrapper keeps a **refresh token** and refreshes the access token in-memory (on expiry and on a 401). Get the refresh token with `server login`.
 
-```
-Open WebUI ─OpenAI /v1/chat/completions─▶ wrapper ─┬─ Bearer + spoof ─▶ api.anthropic.com/v1/messages
-                                                   └─ Bearer + account ▶ chatgpt.com/backend-api/codex/responses
-```
+**Subcriptions are individual and those tokens should not be shared. Do not use this wrapper to re-distribute your account, it's against ToS.**
 
 ## Model registry (`models.json`)
 
-The advertised models and their supported reasoning efforts live in a root **`models.json`** — the single source of truth, not buried in code. Each entry declares its `provider`, the `upstream_id` sent upstream, optional `aliases`, and a `reasoning` block (`efforts`, `default`, and — for Anthropic — a thinking `mode`).
+The advertised models and their supported reasoning efforts live in a root **`models.json`** — the single source of truth. Each entry declares its `provider`, the `upstream_id` sent upstream, optional `aliases`, and a `reasoning` block (`efforts`, `default`, and — for Anthropic — a thinking `mode`).
 
 ```json
 { "id": "gpt-5.6-sol", "provider": "openai", "upstream_id": "gpt-5.6-sol",
@@ -75,6 +70,8 @@ The advertised models and their supported reasoning efforts live in a root **`mo
 ```
 
 Add, remove, or retune a model by editing this file — no rebuild. Point elsewhere with `MODELS_CONFIG`. (Neither subscription backend exposes a reliable "list models + per-model efforts" endpoint, so the registry is declarative by design.)
+
+**Override without a file** — set the whole registry inline via the `MODELS` env var (the JSON document, same shape as `models.json`). It takes priority over the file, so you can retune the bundled image without a rebuild or a mounted volume. The content is validated (must be valid JSON with at least one complete model for a real provider); if it's malformed the wrapper logs an error and falls back to the file rather than refusing to start.
 
 Anthropic thinking `mode`:
 
@@ -121,7 +118,8 @@ Send the OpenAI-standard **`reasoning_effort`** (`low|medium|high|xhigh|max`, pl
 | `CLIENT_API_KEY` | *(required)* | key clients present to this wrapper |
 | `ANTHROPIC_OAUTH_TOKEN` | — | enables Claude; `sk-xxx-oat01-…` from `claude setup-token` |
 | `OPENAI_REFRESH_TOKEN` | — | enables Codex; from `server login` |
-| `MODELS_CONFIG` | `models.json` | path to the model registry |
+| `MODELS` | — | inline registry JSON; overrides the file, falls back to it if invalid |
+| `MODELS_CONFIG` | `models.json` | path to the model registry file |
 | `DEFAULT_MODEL` | *(first enabled)* | used when a request omits the model |
 | `DEFAULT_MAX_TOKENS` | `8192` | injected when the client omits `max_tokens` |
 | `PORT` | `8000` | listen port |
@@ -141,22 +139,44 @@ Send the OpenAI-standard **`reasoning_effort`** (`low|medium|high|xhigh|max`, pl
 | `REQUEST_TIMEOUT_SECONDS` | `600` | upstream request timeout |
 | `MAX_RETRIES` | `2` | Claude retries on 429/5xx with backoff |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `STATELESS` | `true` | keep tokens in memory only; `false` persists them to `TOKENS_FILE` |
+| `TOKENS_FILE` | `tokens.json` | where tokens are persisted when `STATELESS=false` (Docker image default: `/data/tokens.json`) |
+
+## State: stateless vs persisted
+
+By default (`STATELESS=true`) the wrapper holds nothing on disk: tokens are read
+from the environment and the OpenAI access token is refreshed **in memory**.
+Because OpenAI **rotates** the refresh token on every refresh, a restart falls
+back to the env refresh token — which normally still works, but after a long
+downtime it could be stale, requiring a fresh `server login`.
+
+Set `STATELESS=false` to persist tokens to `TOKENS_FILE` (default `tokens.json`,
+mode `0600`): the file holds the long-lived Anthropic token and the rotating
+OpenAI refresh token, and it is rewritten on every rotation. On restart the
+wrapper resumes from the persisted (latest) refresh token, falling back to the
+env token if that fails — so a short restart survives without re-login.
+
+> In Docker, tokens persist to `/data` — a non-root-writable directory the
+> image provides, with `TOKENS_FILE=/data/tokens.json` set by default. So
+> `-e STATELESS=false` works out of the box; mount a volume to keep the file
+> across container recreation: `-e STATELESS=false -v asg-tokens:/data`.
+> (`/app`, holding the binary and `models.json`, stays read-only on purpose.)
 
 ## Run
 
 ### Docker
 
 ```bash
-docker build -t ai-substation .
+docker build -t ai-subscription-gateway .
 docker run -d -p 8000:8000 \
   -e CLIENT_API_KEY=your-client-key \
   -e ANTHROPIC_OAUTH_TOKEN=sk-xxx-oat01-... \
   -e OPENAI_REFRESH_TOKEN=... \
-  --name ai-substation \
-  ai-substation
+  --name ai-subscription-gateway \
+  ai-subscription-gateway
 ```
 
-Prebuilt image (published by CI): `ghcr.io/m600x/ai-substation:latest`.
+Prebuilt image (published by CI): `ghcr.io/m600x/ai-subscription-gateway:latest`.
 
 ### Local
 

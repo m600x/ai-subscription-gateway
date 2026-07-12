@@ -5,7 +5,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/m600x/ai-substation/internal/openai"
+	"github.com/m600x/ai-subscription-gateway/internal/openai"
 )
 
 // sseWriter serializes writes to the client's event stream so real content

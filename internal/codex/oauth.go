@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/m600x/ai-substation/internal/config"
+	"github.com/m600x/ai-subscription-gateway/internal/config"
 )
 
 // loginPort is the fixed local callback port the OAuth client expects.
@@ -107,17 +107,27 @@ const loginSuccessHTML = `<!doctype html><html><head><meta charset="utf-8"><titl
 // It mirrors `claude setup-token`: complete the flow in the browser, then set
 // the printed refresh token as OPENAI_REFRESH_TOKEN.
 func Login(ctx context.Context, cfg *config.Config) (LoginResult, error) {
+	return login(ctx, cfg, loginPort, func(u string) {
+		fmt.Println("Open this URL in your browser to authorize:\n\n  " + u + "\n")
+		_ = openBrowser(u)
+	})
+}
+
+// login is the testable core of Login. port is the local callback port (0 lets
+// the OS pick one, used by tests); open is invoked with the authorize URL (the
+// production hook opens a browser; a test can drive the callback instead).
+func login(ctx context.Context, cfg *config.Config, port int, open func(url string)) (LoginResult, error) {
 	pk, err := generatePKCE()
 	if err != nil {
 		return LoginResult{}, err
 	}
 	state := randomHex(32)
-	redirect := fmt.Sprintf("http://localhost:%d/auth/callback", loginPort)
 
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", loginPort))
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		return LoginResult{}, fmt.Errorf("cannot bind local callback port %d (is another login running?): %w", loginPort, err)
+		return LoginResult{}, fmt.Errorf("cannot bind local callback port %d (is another login running?): %w", port, err)
 	}
+	redirect := fmt.Sprintf("http://localhost:%d/auth/callback", ln.Addr().(*net.TCPAddr).Port)
 
 	type result struct {
 		tr  tokenResponse
@@ -159,9 +169,7 @@ func Login(ctx context.Context, cfg *config.Config) (LoginResult, error) {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	authURL := authorizeURL(cfg.OpenAIAuthIssuer, cfg.OpenAIClientID, redirect, cfg.OpenAIOriginator, pk.challenge, state)
-	fmt.Println("Open this URL in your browser to authorize:\n\n  " + authURL + "\n")
-	_ = openBrowser(authURL)
+	open(authorizeURL(cfg.OpenAIAuthIssuer, cfg.OpenAIClientID, redirect, cfg.OpenAIOriginator, pk.challenge, state))
 
 	select {
 	case <-ctx.Done():

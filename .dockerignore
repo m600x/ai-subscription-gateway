@@ -4,4 +4,6 @@ bin
 out
 server
 .env
+tokens.json
+tokens.json.tmp
 *.md
