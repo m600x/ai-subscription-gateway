@@ -65,22 +65,28 @@ func runServe() {
 	}
 	slog.Info("model registry loaded", "source", src.Name, "models", reg.Len())
 
-	// In non-stateless mode, persist tokens to disk so a short restart resumes
-	// with the latest (rotated) OpenAI refresh token. Seed the file from the
-	// environment, preferring an already-persisted OpenAI refresh token.
+	// In non-stateless mode, persist tokens to disk so a restart resumes with
+	// the latest (rotated) OpenAI refresh token. The persisted file takes
+	// priority over the environment for that token (the env value goes obsolete
+	// as the token rotates over the gateway's life); the env value is kept as a
+	// fallback. Merging into cfg here means provider enablement below also
+	// reflects a token that lives only in the file.
 	var store *tokenstore.Store
+	var openaiRefreshFallback string
 	if !cfg.Stateless {
 		store, err = tokenstore.Open(cfg.TokensFile)
 		if err != nil {
 			slog.Error("token file error", "path", cfg.TokensFile, "err", err)
 			os.Exit(1)
 		}
-		persistedOpenAI := store.Tokens().OpenAIRefreshToken
-		openaiSeed := cfg.OpenAIRefreshToken
-		if persistedOpenAI != "" {
-			openaiSeed = persistedOpenAI
+		res := store.Resolve(cfg.OAuthToken, cfg.OpenAIRefreshToken)
+		if res.OpenAIRefreshToken != cfg.OpenAIRefreshToken && res.OpenAIRefreshToken != "" {
+			slog.Info("using persisted OpenAI refresh token from file (env value ignored as potentially stale)", "path", cfg.TokensFile)
 		}
-		if err := store.Seed(cfg.OAuthToken, openaiSeed); err != nil {
+		cfg.OAuthToken = res.AnthropicOAuthToken
+		cfg.OpenAIRefreshToken = res.OpenAIRefreshToken
+		openaiRefreshFallback = res.OpenAIRefreshFallback
+		if err := store.Seed(cfg.OAuthToken, cfg.OpenAIRefreshToken); err != nil {
 			slog.Error("failed to write token file", "path", cfg.TokensFile, "err", err)
 			os.Exit(1)
 		}
@@ -96,9 +102,9 @@ func runServe() {
 	if cfg.OpenAIEnabled() {
 		cp := codex.NewProvider(cfg)
 		if store != nil {
-			// Prefer the persisted refresh token; fall back to the env token
-			// (covers a re-login) and persist future rotations.
-			cp.UseRefreshTokens(store.Tokens().OpenAIRefreshToken, cfg.OpenAIRefreshToken)
+			// Primary is the (file-priority) token cfg now holds; fall back to
+			// the env token for a deliberate re-login, and persist rotations.
+			cp.UseRefreshTokens(cfg.OpenAIRefreshToken, openaiRefreshFallback)
 			cp.SetPersist(store.SetOpenAIRefresh)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -54,6 +54,43 @@ func (s *Store) Tokens() Tokens {
 	return s.t
 }
 
+// Resolved is the effective credential set after applying file-vs-env
+// precedence.
+type Resolved struct {
+	AnthropicOAuthToken string
+	// OpenAIRefreshToken is the token to use first. The persisted file wins
+	// over the environment: across the gateway's life the OpenAI refresh token
+	// rotates and the latest value is written here, so on a restart the env
+	// value may be obsolete.
+	OpenAIRefreshToken string
+	// OpenAIRefreshFallback is the env-provided refresh token, tried only if a
+	// refresh with the primary (file) token fails -- lets a deliberate
+	// re-login (new env value) take effect even when a stale file exists.
+	OpenAIRefreshFallback string
+}
+
+// Resolve merges env-provided credentials with the persisted file:
+//
+//   - OpenAI refresh token: the file wins (it may have rotated); the env value
+//     is kept as a fallback.
+//   - Anthropic token: the env wins (the user rotates it via the env); the file
+//     is used only to backfill when the env is unset.
+func (s *Store) Resolve(envAnthropic, envOpenAIRefresh string) Resolved {
+	t := s.Tokens()
+	r := Resolved{
+		AnthropicOAuthToken:   envAnthropic,
+		OpenAIRefreshToken:    envOpenAIRefresh,
+		OpenAIRefreshFallback: envOpenAIRefresh,
+	}
+	if r.AnthropicOAuthToken == "" && t.AnthropicOAuthToken != "" {
+		r.AnthropicOAuthToken = t.AnthropicOAuthToken
+	}
+	if t.OpenAIRefreshToken != "" {
+		r.OpenAIRefreshToken = t.OpenAIRefreshToken
+	}
+	return r
+}
+
 // Seed sets the initial token values and writes the file. Empty arguments
 // leave the corresponding field unchanged (so an already-persisted, freshly
 // rotated OpenAI refresh token is not clobbered by a stale env value).

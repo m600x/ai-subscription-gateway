@@ -60,6 +60,63 @@ func TestSeedEmptyLeavesFieldUnchanged(t *testing.T) {
 	}
 }
 
+func TestResolveOpenAIFileWinsOverEnv(t *testing.T) {
+	// The core scenario: the gateway was launched with an env token, rotated it
+	// over its life (persisting the latest to the file), then restarted with the
+	// same (now stale) env still set. The file token must win.
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	s, _ := Open(path)
+	_ = s.Seed("sk-ant", "rt-fresh-from-file")
+
+	r := s.Resolve("sk-ant", "rt-stale-env")
+	if r.OpenAIRefreshToken != "rt-fresh-from-file" {
+		t.Errorf("OpenAIRefreshToken = %q, want the file token to win", r.OpenAIRefreshToken)
+	}
+	if r.OpenAIRefreshFallback != "rt-stale-env" {
+		t.Errorf("fallback = %q, want the env token preserved as fallback", r.OpenAIRefreshFallback)
+	}
+}
+
+func TestResolveOpenAIUsesEnvWhenFileEmpty(t *testing.T) {
+	// First launch: no file yet -> env is used and becomes the fallback.
+	s, _ := Open(filepath.Join(t.TempDir(), "tokens.json"))
+	r := s.Resolve("", "rt-env")
+	if r.OpenAIRefreshToken != "rt-env" || r.OpenAIRefreshFallback != "rt-env" {
+		t.Errorf("resolved = %+v, want env token as primary and fallback", r)
+	}
+}
+
+func TestResolveOpenAIFromFileWhenEnvUnset(t *testing.T) {
+	// Restart where the env token was dropped entirely: the file still enables
+	// OpenAI (non-empty primary), with no fallback.
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	s, _ := Open(path)
+	_ = s.Seed("", "rt-only-in-file")
+
+	r := s.Resolve("", "")
+	if r.OpenAIRefreshToken != "rt-only-in-file" {
+		t.Errorf("OpenAIRefreshToken = %q, want the file token", r.OpenAIRefreshToken)
+	}
+	if r.OpenAIRefreshFallback != "" {
+		t.Errorf("fallback = %q, want empty", r.OpenAIRefreshFallback)
+	}
+}
+
+func TestResolveAnthropicEnvWinsFileBackfills(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	s, _ := Open(path)
+	_ = s.Seed("sk-ant-file", "rt")
+
+	// Env set -> env wins (the user rotates the long-lived token via env).
+	if got := s.Resolve("sk-ant-env", "rt").AnthropicOAuthToken; got != "sk-ant-env" {
+		t.Errorf("anthropic = %q, want env to win", got)
+	}
+	// Env unset -> file backfills.
+	if got := s.Resolve("", "rt").AnthropicOAuthToken; got != "sk-ant-file" {
+		t.Errorf("anthropic = %q, want file backfill", got)
+	}
+}
+
 func TestSetOpenAIRefreshPersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
 	s, _ := Open(path)

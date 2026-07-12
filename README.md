@@ -152,9 +152,21 @@ downtime it could be stale, requiring a fresh `server login`.
 
 Set `STATELESS=false` to persist tokens to `TOKENS_FILE` (default `tokens.json`,
 mode `0600`): the file holds the long-lived Anthropic token and the rotating
-OpenAI refresh token, and it is rewritten on every rotation. On restart the
-wrapper resumes from the persisted (latest) refresh token, falling back to the
-env token if that fails — so a short restart survives without re-login.
+OpenAI refresh token, and it is rewritten on every rotation.
+
+**Precedence on restart (non-stateless):** the file wins.
+
+- **OpenAI refresh token** — the persisted (file) value takes priority over
+  `OPENAI_REFRESH_TOKEN`. Over the gateway's life the token rotates and the env
+  var goes obsolete, so on a pod/host restart the file's latest token is used,
+  not the stale env one. The env value is kept only as a fallback (tried if the
+  file token is rejected, e.g. after a deliberate re-login). If the file has a
+  token, OpenAI is enabled even when the env var is unset.
+- **Anthropic token** — the env wins (you rotate this long-lived token via the
+  env once a year); the file is used only to backfill when the env is unset.
+
+So a short restart survives without re-login, and a stale env token never
+shadows the fresh one on disk.
 
 > In Docker, tokens persist to `/data` — a non-root-writable directory the
 > image provides, with `TOKENS_FILE=/data/tokens.json` set by default. So
