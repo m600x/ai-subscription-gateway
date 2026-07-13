@@ -166,6 +166,22 @@ func TestModelsListsOnlyEnabledProviders(t *testing.T) {
 			t.Errorf("model %q owned_by = %q", m.ID, m.OwnedBy)
 		}
 	}
+
+	// The reasoning ladder from the registry is exposed as a vendor extension.
+	sonnet := list.Data[0]
+	if sonnet.Reasoning == nil {
+		t.Fatalf("model %q has no reasoning block", sonnet.ID)
+	}
+	if got := strings.Join(sonnet.Reasoning.Efforts, ","); got != "off,low,medium,high,xhigh,max" {
+		t.Errorf("%q efforts = %q", sonnet.ID, got)
+	}
+	if sonnet.Reasoning.Default != "high" || sonnet.Reasoning.Mode != "default-on" {
+		t.Errorf("%q reasoning = %+v, want default high mode default-on", sonnet.ID, sonnet.Reasoning)
+	}
+	opus := list.Data[1]
+	if opus.Reasoning == nil || opus.Reasoning.Mode != "opt-in" {
+		t.Errorf("%q reasoning = %+v, want mode opt-in", opus.ID, opus.Reasoning)
+	}
 }
 
 func TestChatNonStreamAndSpoof(t *testing.T) {

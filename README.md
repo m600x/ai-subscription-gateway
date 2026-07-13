@@ -86,10 +86,26 @@ Anthropic thinking `mode`:
 | Method | Path | Notes |
 | ------ | ---- | ----- |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible; streaming + non-streaming |
-| `GET`  | `/v1/models` | models of the enabled provider(s) |
+| `GET`  | `/v1/models` | models of the enabled provider(s), each with its `reasoning` ladder |
 | `GET`  | `/health` | liveness; no auth |
 
 Clients must send `Authorization: Bearer <CLIENT_API_KEY>` (except `/health`).
+
+Each `/v1/models` entry carries a `reasoning` vendor extension mirroring `models.json` — the accepted `reasoning_effort` values, the default, and the mode. Standard OpenAI clients ignore the extra key:
+
+```json
+{
+  "id": "claude-sonnet-5",
+  "object": "model",
+  "created": 1752384000,
+  "owned_by": "anthropic",
+  "reasoning": {
+    "efforts": ["off", "low", "medium", "high", "xhigh", "max"],
+    "default": "high",
+    "mode": "default-on"
+  }
+}
+```
 
 ## OpenAI-schema features
 

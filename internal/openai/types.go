@@ -180,12 +180,21 @@ type ChatCompletion struct {
 	Usage   *Usage   `json:"usage,omitempty"`
 }
 
+// ModelReasoning is a vendor extension on the /v1/models entry: the
+// reasoning_effort values the model accepts, its default, and its mode.
+type ModelReasoning struct {
+	Efforts []string `json:"efforts"`
+	Default string   `json:"default"`
+	Mode    string   `json:"mode,omitempty"`
+}
+
 // Model is one entry in the /v1/models list.
 type Model struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
+	ID        string          `json:"id"`
+	Object    string          `json:"object"`
+	Created   int64           `json:"created"`
+	OwnedBy   string          `json:"owned_by"`
+	Reasoning *ModelReasoning `json:"reasoning,omitempty"`
 }
 
 // ModelList is the /v1/models response.

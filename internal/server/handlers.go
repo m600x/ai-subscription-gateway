@@ -25,7 +25,15 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	list := openai.ModelList{Object: "list"}
 	for _, m := range s.reg.Public(s.enabled) {
-		list.Data = append(list.Data, openai.Model{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider})
+		var reasoning *openai.ModelReasoning
+		if len(m.Reasoning.Efforts) > 0 {
+			reasoning = &openai.ModelReasoning{
+				Efforts: m.Reasoning.Efforts,
+				Default: m.Reasoning.Default,
+				Mode:    m.Reasoning.Mode,
+			}
+		}
+		list.Data = append(list.Data, openai.Model{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider, Reasoning: reasoning})
 	}
 	writeJSON(w, http.StatusOK, list)
 }
