@@ -37,6 +37,17 @@ type Reasoning struct {
 	Mode    string   `json:"mode,omitempty"`
 }
 
+// Pricing is a model's API-equivalent sticker price per token bucket.
+// Buckets the vendor doesn't price (e.g. no cache-write charge) are omitted.
+type Pricing struct {
+	Currency   string  `json:"currency"`
+	Unit       string  `json:"unit"`
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read,omitempty"`
+	CacheWrite float64 `json:"cache_write,omitempty"`
+}
+
 // Model is one entry in the registry.
 type Model struct {
 	ID               string    `json:"id"`
@@ -44,6 +55,7 @@ type Model struct {
 	UpstreamID       string    `json:"upstream_id"`
 	Aliases          []string  `json:"aliases,omitempty"`
 	Reasoning        Reasoning `json:"reasoning"`
+	Pricing          *Pricing  `json:"pricing,omitempty"`
 	DefaultMaxTokens int       `json:"default_max_tokens,omitempty"`
 }
 

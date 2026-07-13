@@ -24,7 +24,9 @@ const spoof = "You are Claude Code, Anthropic's official CLI for Claude."
 const testModelsJSON = `{
   "models": [
     {"id":"claude-sonnet-5","provider":"anthropic","upstream_id":"claude-sonnet-5",
-     "reasoning":{"efforts":["off","low","medium","high","xhigh","max"],"default":"high","mode":"default-on"},"default_max_tokens":8192},
+     "reasoning":{"efforts":["off","low","medium","high","xhigh","max"],"default":"high","mode":"default-on"},
+     "pricing":{"currency":"USD","unit":"per_million_tokens","input":3.0,"output":15.0,"cache_read":0.3,"cache_write":3.75},
+     "default_max_tokens":8192},
     {"id":"claude-opus-4-8","provider":"anthropic","upstream_id":"claude-opus-4-8",
      "reasoning":{"efforts":["off","low","medium","high"],"default":"high","mode":"opt-in"},"default_max_tokens":8192},
     {"id":"gpt-5-codex","provider":"openai","upstream_id":"gpt-5-codex",
@@ -181,6 +183,17 @@ func TestModelsListsOnlyEnabledProviders(t *testing.T) {
 	opus := list.Data[1]
 	if opus.Reasoning == nil || opus.Reasoning.Mode != "opt-in" {
 		t.Errorf("%q reasoning = %+v, want mode opt-in", opus.ID, opus.Reasoning)
+	}
+
+	// Pricing is exposed as a vendor extension when the registry declares it.
+	if p := sonnet.Pricing; p == nil {
+		t.Fatalf("model %q has no pricing block", sonnet.ID)
+	} else if p.Currency != "USD" || p.Unit != "per_million_tokens" ||
+		p.Input != 3.0 || p.Output != 15.0 || p.CacheRead != 0.3 || p.CacheWrite != 3.75 {
+		t.Errorf("%q pricing = %+v", sonnet.ID, p)
+	}
+	if opus.Pricing != nil {
+		t.Errorf("%q pricing = %+v, want none (not declared in registry)", opus.ID, opus.Pricing)
 	}
 }
 

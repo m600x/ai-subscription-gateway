@@ -28,10 +28,12 @@ Auth: (Bearer) YOUR_ACCESS_KEY
 ---
 ## Description
 
-A tiny, fast OpenAI-compatible API in front of **Claude** (Anthropic Messages API) and **Codex** (ChatGPT Responses API), backed by your **subscription** rather than per-token API billing. It calls each upstream directly over HTTP using a subscription OAuth token, no CLI subprocess, no Python, no per-request cold start.
+A tiny, fast OpenAI-compatible API in front of **Claude** (Anthropic Messages API) and **Codex** (ChatGPT Responses API), backed by your **subscription** rather than per-token API billing. 
 
-One key example of usage is in [Open WebUI](https://github.com/open-webui/open-webui).
+The API response comply with OpenAI format **BUT** it add two additional field: available reasoning effort supported by the model and cost.
+Used along with [OpenWeb UI fork](https://github.com/m600x/open-webui) it allow one to have a per message/chat session cost.
 
+It calls each upstream directly over HTTP using a subscription OAuth token, no CLI subprocess, no Python, no per-request cold start.
 The common approach wraps a vendor CLI as a subprocess, adding process-startup latency to every request. This project talks straight to the upstream HTTP APIs:
 
 - **Single static Go binary** (zero external dependencies), tens of MiB RAM, instant startup.
@@ -86,12 +88,12 @@ Anthropic thinking `mode`:
 | Method | Path | Notes |
 | ------ | ---- | ----- |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible; streaming + non-streaming |
-| `GET`  | `/v1/models` | models of the enabled provider(s), each with its `reasoning` ladder |
+| `GET`  | `/v1/models` | models of the enabled provider(s), each with its `reasoning` ladder and `pricing` |
 | `GET`  | `/health` | liveness; no auth |
 
 Clients must send `Authorization: Bearer <CLIENT_API_KEY>` (except `/health`).
 
-Each `/v1/models` entry carries a `reasoning` vendor extension mirroring `models.json` — the accepted `reasoning_effort` values, the default, and the mode. Standard OpenAI clients ignore the extra key:
+Each `/v1/models` entry carries two vendor extensions mirroring `models.json` — `reasoning` (the accepted `reasoning_effort` values, the default, and the mode) and `pricing` (the API-equivalent sticker price per token bucket; combined with the `usage` object on responses, callers can estimate per-message cost). Standard OpenAI clients ignore the extra keys:
 
 ```json
 {
@@ -103,6 +105,14 @@ Each `/v1/models` entry carries a `reasoning` vendor extension mirroring `models
     "efforts": ["off", "low", "medium", "high", "xhigh", "max"],
     "default": "high",
     "mode": "default-on"
+  },
+  "pricing": {
+    "currency": "USD",
+    "unit": "per_million_tokens",
+    "input": 3.0,
+    "output": 15.0,
+    "cache_read": 0.3,
+    "cache_write": 3.75
   }
 }
 ```

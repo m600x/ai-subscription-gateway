@@ -4,6 +4,13 @@
     ./gen-models.py
     ./gen-models.py models_test.json   # -> to a different file (e.g. to diff)
 
+Each model carries a "pricing" object: sticker price for standard processing,
+with "currency"/"unit" ("USD" per million tokens) followed by "input",
+"output", "cache_read" (cached input / cache hit), and "cache_write"
+(Anthropic 5m write / OpenAI cache write, omitted when the vendor lists none).
+Anthropic prices come from the docs pricing page; OpenAI prices from the API
+pricing page.
+
 Because it scrapes HTML, it is inherently brittle: if a vendor restructures its
 docs, the selectors here may need updating. It is a convenience regenerator, no guarantee.
 """
@@ -17,7 +24,9 @@ import urllib.request
 
 ANTHROPIC_OVERVIEW = "https://platform.claude.com/docs/en/about-claude/models/overview"
 ANTHROPIC_EFFORT = "https://platform.claude.com/docs/en/build-with-claude/effort"
+ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing"
 OPENAI_MODELS = "https://learn.chatgpt.com/docs/models"
+OPENAI_PRICING = "https://developers.openai.com/api/docs/pricing"
 
 DEFAULT_MAX_TOKENS = 8192  # wrapper injection when a client omits max_tokens
 
@@ -44,6 +53,11 @@ def strip_tags(s):
     return html.unescape(re.sub(r"<[^>]+>", " ", s))
 
 
+def money(v):
+    """Render a USD-per-MTok value as a JSON float (5.0, 2.5, 3.125)."""
+    return repr(float(v))
+
+
 # --------------------------------------------------------------------------
 # Anthropic
 # --------------------------------------------------------------------------
@@ -55,7 +69,41 @@ def anthropic_ladder(effort_html):
     return sorted(tokens, key=lambda t: RANK[t])
 
 
-def parse_anthropic(overview_html, effort_html):
+def anthropic_display_pattern(mid):
+    """Regex matching a model id's display name: claude-opus-4-8 -> Claude Opus 4.8."""
+    parts, words, i = mid.split("-")[1:], [], 0
+    while i < len(parts):
+        if parts[i].isdigit():
+            nums = []
+            while i < len(parts) and parts[i].isdigit():
+                nums.append(parts[i]); i += 1
+            words.append(r"\.".join(nums))
+        else:
+            words.append(re.escape(parts[i])); i += 1
+    return r"Claude\s+" + r"\s+".join(words)
+
+
+def anthropic_prices(pricing_html, model_ids):
+    """$/MTok per model from the pricing page's five-column "Model pricing"
+    table: base input, 5m cache write, 1h cache write, cache read, output.
+    The last matching row wins, so Sonnet's time-boxed introductory-pricing
+    row is skipped in favor of the standard one."""
+    start = pricing_html.find("Base Input Tokens")
+    end = pricing_html.find("Cloud platform pricing")
+    table = strip_tags(pricing_html[start:end if end > start else None])
+    dollar = r"\$([0-9.]+)\s*/\s*MTok"
+    prices = {}
+    for mid in model_ids:
+        pat = anthropic_display_pattern(mid) + r"[^$]*" + r"\s*".join([dollar] * 5)
+        rows = re.findall(pat, table, re.I)
+        if rows:
+            base, w5m, _w1h, read, out = (float(v) for v in rows[-1])
+            prices[mid] = {"input": base, "output": out, "cache_read": read,
+                           "cache_write": w5m}
+    return prices
+
+
+def parse_anthropic(overview_html, effort_html, pricing_html):
     # Only the current lineup: everything before the "Legacy models" accordion.
     cut = overview_html.find("Legacy models")
     cur = overview_html[:cut] if cut > 0 else overview_html
@@ -77,30 +125,35 @@ def parse_anthropic(overview_html, effort_html):
     adapt_row = adapt_row[:adapt_row.find("Comparative latency")]
     adapt = re.findall(r"Yes \(always on\)|Yes|No", strip_tags(adapt_row))
 
+    prices = anthropic_prices(pricing_html, model_ids)
+
     ladder = anthropic_ladder(effort_html)
     models = []
     for mid, a in zip(model_ids, adapt):
         if a == "No":
             # Adaptive thinking unsupported -> serve as a plain model.
-            models.append({
+            m = {
                 "id": mid, "provider": "anthropic", "upstream_id": mid,
                 "comment": "Adaptive thinking is not supported on this model, "
                            "so no reasoning efforts are advertised.",
                 "reasoning": {"efforts": [], "default": "", "mode": "opt-in"},
                 "default_max_tokens": DEFAULT_MAX_TOKENS,
-            })
+            }
         elif a == "Yes (always on)":
-            models.append({
+            m = {
                 "id": mid, "provider": "anthropic", "upstream_id": mid,
                 "reasoning": {"efforts": ladder, "default": "high", "mode": "always-on"},
                 "default_max_tokens": DEFAULT_MAX_TOKENS,
-            })
+            }
         else:  # "Yes" -> effort defaults to high, i.e. thinks unless disabled.
-            models.append({
+            m = {
                 "id": mid, "provider": "anthropic", "upstream_id": mid,
                 "reasoning": {"efforts": ["off"] + ladder, "default": "high", "mode": "default-on"},
                 "default_max_tokens": DEFAULT_MAX_TOKENS,
-            })
+            }
+        if mid in prices:
+            m["pricing"] = prices[mid]
+        models.append(m)
     return models
 
 
@@ -130,7 +183,31 @@ def openai_ladder(clean):
     return efforts, (default or "medium")
 
 
-def parse_openai(models_html):
+def openai_prices(pricing_html, model_ids):
+    """Standard-tier $/MTok per model from the API pricing page.
+
+    Each pricing table row reads "<id> $in $cached $writes $out" once tags are
+    stripped ("-" where a column doesn't apply). The first occurrence of a
+    model is its Standard-processing row (Batch/Flex/Priority come later).
+    """
+    clean = re.sub(r"\s+", " ", strip_tags(pricing_html))
+    prices = {}
+    for mid in model_ids:
+        m = re.search(
+            re.escape(mid)
+            + r"\s+\$([0-9.]+)\s+(?:\$([0-9.]+)|-)\s+(?:\$([0-9.]+)|-)\s+\$([0-9.]+)",
+            clean)
+        if m:
+            cost = {"input": float(m.group(1)), "output": float(m.group(4))}
+            if m.group(2):
+                cost["cache_read"] = float(m.group(2))
+            if m.group(3):
+                cost["cache_write"] = float(m.group(3))
+            prices[mid] = cost
+    return prices
+
+
+def parse_openai(models_html, pricing_html):
     clean = re.sub(r"[ \t]+", " ", strip_tags(models_html))
     # Current models are the cards before the "Deprecated" section; each card
     # carries a `codex -m <id>` command that names the model.
@@ -143,13 +220,17 @@ def parse_openai(models_html):
             seen.add(m); model_ids.append(m)
 
     efforts, default = openai_ladder(clean)
+    prices = openai_prices(pricing_html, model_ids)
     models = []
     for mid in model_ids:
-        models.append({
+        m = {
             "id": mid, "provider": "openai", "upstream_id": mid,
             "aliases": [mid.replace("gpt-", "gpt")],  # deterministic dotless alias
             "reasoning": {"efforts": efforts, "default": default},
-        })
+        }
+        if mid in prices:
+            m["pricing"] = prices[mid]
+        models.append(m)
     return models
 
 
@@ -175,15 +256,28 @@ def render(models):
         if "aliases" in m:
             lines.append(f'      "aliases": [{qlist(m["aliases"])}],')
         r = m["reasoning"]
+        cost = m.get("pricing")
+        cost_line = None
+        if cost:
+            fields = ", ".join(
+                f'"{k}": {money(cost[k])}'
+                for k in ("input", "output", "cache_read", "cache_write")
+                if k in cost)
+            cost_line = (f'      "pricing": {{ "currency": "USD", '
+                         f'"unit": "per_million_tokens", {fields} }}')
         if m["provider"] == "anthropic":
             lines.append(
                 f'      "reasoning": {{ "efforts": [{qlist(r["efforts"])}], '
                 f'"default": "{r["default"]}", "mode": "{r["mode"]}" }},')
+            if cost_line:
+                lines.append(cost_line + ",")
             lines.append(f'      "default_max_tokens": {m["default_max_tokens"]}')
         else:
             lines.append(
                 f'      "reasoning": {{ "efforts": [{qlist(r["efforts"])}], '
-                f'"default": "{r["default"]}" }}')
+                f'"default": "{r["default"]}" }}' + ("," if cost_line else ""))
+            if cost_line:
+                lines.append(cost_line)
         lines.append("    }" + comma)
         out.extend(lines)
     out.append("  ]")
@@ -195,9 +289,11 @@ def main():
     out_path = sys.argv[1] if len(sys.argv) > 1 else "models.json"
     anthro = fetch(ANTHROPIC_OVERVIEW, "SRC_ANTHROPIC")
     effort = fetch(ANTHROPIC_EFFORT, "SRC_EFFORT")
+    a_pricing = fetch(ANTHROPIC_PRICING, "SRC_ANTHROPIC_PRICING")
     openai = fetch(OPENAI_MODELS, "SRC_OPENAI")
+    o_pricing = fetch(OPENAI_PRICING, "SRC_OPENAI_PRICING")
 
-    models = parse_anthropic(anthro, effort) + parse_openai(openai)
+    models = parse_anthropic(anthro, effort, a_pricing) + parse_openai(openai, o_pricing)
     if not models:
         sys.exit("error: parsed zero models (docs layout may have changed)")
 

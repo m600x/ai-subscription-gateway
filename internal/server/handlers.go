@@ -33,7 +33,18 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				Mode:    m.Reasoning.Mode,
 			}
 		}
-		list.Data = append(list.Data, openai.Model{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider, Reasoning: reasoning})
+		var pricing *openai.ModelPricing
+		if p := m.Pricing; p != nil {
+			pricing = &openai.ModelPricing{
+				Currency:   p.Currency,
+				Unit:       p.Unit,
+				Input:      p.Input,
+				Output:     p.Output,
+				CacheRead:  p.CacheRead,
+				CacheWrite: p.CacheWrite,
+			}
+		}
+		list.Data = append(list.Data, openai.Model{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider, Reasoning: reasoning, Pricing: pricing})
 	}
 	writeJSON(w, http.StatusOK, list)
 }

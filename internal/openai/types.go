@@ -188,6 +188,18 @@ type ModelReasoning struct {
 	Mode    string   `json:"mode,omitempty"`
 }
 
+// ModelPricing is a vendor extension on the /v1/models entry: the model's
+// API-equivalent sticker price per token bucket. Buckets the vendor doesn't
+// price are omitted.
+type ModelPricing struct {
+	Currency   string  `json:"currency"`
+	Unit       string  `json:"unit"`
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read,omitempty"`
+	CacheWrite float64 `json:"cache_write,omitempty"`
+}
+
 // Model is one entry in the /v1/models list.
 type Model struct {
 	ID        string          `json:"id"`
@@ -195,6 +207,7 @@ type Model struct {
 	Created   int64           `json:"created"`
 	OwnedBy   string          `json:"owned_by"`
 	Reasoning *ModelReasoning `json:"reasoning,omitempty"`
+	Pricing   *ModelPricing   `json:"pricing,omitempty"`
 }
 
 // ModelList is the /v1/models response.
