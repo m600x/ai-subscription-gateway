@@ -9,7 +9,8 @@ import (
 const sample = `{
   "models": [
     {"id":"claude-sonnet-5","provider":"anthropic","upstream_id":"claude-sonnet-5",
-     "reasoning":{"efforts":["off","low","high"],"default":"high","mode":"default-on"},"default_max_tokens":8192},
+     "reasoning":{"efforts":["off","low","high"],"default":"high","mode":"default-on"},
+     "context_window":1000000,"default_max_tokens":8192},
     {"id":"gpt-5-codex","provider":"openai","upstream_id":"gpt-5-codex","aliases":["gpt5-codex"],
      "reasoning":{"efforts":["low","medium","high"],"default":"medium"}}
   ]
@@ -33,6 +34,13 @@ func TestLookupByIDAndAlias(t *testing.T) {
 
 	if m, ok := reg.Lookup("claude-sonnet-5"); !ok || m.Provider != ProviderAnthropic {
 		t.Errorf("lookup sonnet: ok=%v m=%+v", ok, m)
+	}
+	// context_window round-trips when declared, stays zero when absent.
+	if m, _ := reg.Lookup("claude-sonnet-5"); m.ContextWindow != 1000000 {
+		t.Errorf("sonnet context_window = %d, want 1000000", m.ContextWindow)
+	}
+	if m, _ := reg.Lookup("gpt-5-codex"); m.ContextWindow != 0 {
+		t.Errorf("codex context_window = %d, want 0 (absent)", m.ContextWindow)
 	}
 	// Alias, case-insensitive.
 	if m, ok := reg.Lookup("GPT5-CODEX"); !ok || m.ID != "gpt-5-codex" {
@@ -94,6 +102,8 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"empty models":  `{"models":[]}`,
 		"empty id":      `{"models":[{"id":"","provider":"openai"}]}`,
 		"bad provider":  `{"models":[{"id":"x","provider":"aws"}]}`,
+		"negative context_window": `{"models":[{"id":"x","provider":"openai",
+			"reasoning":{"efforts":["low"],"default":"low"},"context_window":-1}]}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

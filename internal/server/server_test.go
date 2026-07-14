@@ -26,7 +26,7 @@ const testModelsJSON = `{
     {"id":"claude-sonnet-5","provider":"anthropic","upstream_id":"claude-sonnet-5",
      "reasoning":{"efforts":["off","low","medium","high","xhigh","max"],"default":"high","mode":"default-on"},
      "pricing":{"currency":"USD","unit":"per_million_tokens","input":3.0,"output":15.0,"cache_read":0.3,"cache_write":3.75},
-     "default_max_tokens":8192},
+     "context_window":1000000,"default_max_tokens":8192},
     {"id":"claude-opus-4-8","provider":"anthropic","upstream_id":"claude-opus-4-8",
      "reasoning":{"efforts":["off","low","medium","high"],"default":"high","mode":"opt-in"},"default_max_tokens":8192},
     {"id":"gpt-5-codex","provider":"openai","upstream_id":"gpt-5-codex",
@@ -194,6 +194,15 @@ func TestModelsListsOnlyEnabledProviders(t *testing.T) {
 	}
 	if opus.Pricing != nil {
 		t.Errorf("%q pricing = %+v, want none (not declared in registry)", opus.ID, opus.Pricing)
+	}
+
+	// context_window is exposed as a vendor extension when the registry
+	// declares it, and omitted (zero) otherwise.
+	if sonnet.ContextWindow != 1000000 {
+		t.Errorf("%q context_window = %d, want 1000000", sonnet.ID, sonnet.ContextWindow)
+	}
+	if opus.ContextWindow != 0 {
+		t.Errorf("%q context_window = %d, want 0 (not declared in registry)", opus.ID, opus.ContextWindow)
 	}
 }
 

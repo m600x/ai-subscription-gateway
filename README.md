@@ -30,7 +30,10 @@ Auth: (Bearer) YOUR_ACCESS_KEY
 
 A tiny, fast OpenAI-compatible API in front of **Claude** (Anthropic Messages API) and **Codex** (ChatGPT Responses API), backed by your **subscription** rather than per-token API billing. 
 
-The API response comply with OpenAI format **BUT** it add two additional field: available reasoning effort supported by the model and cost.
+The API response comply with OpenAI format **BUT** it add the following:
+- Available reasoning effort supported by the model
+- Cost of each tokens categories
+- Model context limit
 Used along with [OpenWeb UI fork](https://github.com/m600x/open-webui) it allow one to have a per message/chat session cost.
 
 It calls each upstream directly over HTTP using a subscription OAuth token, no CLI subprocess, no Python, no per-request cold start.

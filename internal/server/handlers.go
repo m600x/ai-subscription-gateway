@@ -44,7 +44,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				CacheWrite: p.CacheWrite,
 			}
 		}
-		list.Data = append(list.Data, openai.Model{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider, Reasoning: reasoning, Pricing: pricing})
+		list.Data = append(list.Data, openai.Model{ID: m.ID, Object: "model", Created: now, OwnedBy: m.Provider, Reasoning: reasoning, Pricing: pricing, ContextWindow: m.ContextWindow})
 	}
 	writeJSON(w, http.StatusOK, list)
 }

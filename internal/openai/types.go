@@ -200,14 +200,16 @@ type ModelPricing struct {
 	CacheWrite float64 `json:"cache_write,omitempty"`
 }
 
-// Model is one entry in the /v1/models list.
+// Model is one entry in the /v1/models list. ContextWindow is a vendor
+// extension: the model's context window in tokens, omitted when unknown.
 type Model struct {
-	ID        string          `json:"id"`
-	Object    string          `json:"object"`
-	Created   int64           `json:"created"`
-	OwnedBy   string          `json:"owned_by"`
-	Reasoning *ModelReasoning `json:"reasoning,omitempty"`
-	Pricing   *ModelPricing   `json:"pricing,omitempty"`
+	ID            string          `json:"id"`
+	Object        string          `json:"object"`
+	Created       int64           `json:"created"`
+	OwnedBy       string          `json:"owned_by"`
+	Reasoning     *ModelReasoning `json:"reasoning,omitempty"`
+	Pricing       *ModelPricing   `json:"pricing,omitempty"`
+	ContextWindow int             `json:"context_window,omitempty"`
 }
 
 // ModelList is the /v1/models response.

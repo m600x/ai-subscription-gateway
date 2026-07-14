@@ -11,6 +11,12 @@ with "currency"/"unit" ("USD" per million tokens) followed by "input",
 Anthropic prices come from the docs pricing page; OpenAI prices from the API
 pricing page.
 
+Each model also carries "context_window" (tokens) when the vendor documents
+it: Anthropic from the overview comparison table's "Context window" row;
+OpenAI from each model's page on developers.openai.com. Models whose window
+cannot be determined (e.g. Codex-only models with no API docs page) omit the
+field -- downstream consumers treat "absent" as "unknown", never guess.
+
 Because it scrapes HTML, it is inherently brittle: if a vendor restructures its
 docs, the selectors here may need updating. It is a convenience regenerator, no guarantee.
 """
@@ -27,6 +33,10 @@ ANTHROPIC_EFFORT = "https://platform.claude.com/docs/en/build-with-claude/effort
 ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing"
 OPENAI_MODELS = "https://learn.chatgpt.com/docs/models"
 OPENAI_PRICING = "https://developers.openai.com/api/docs/pricing"
+# Per-model spec pages ("Context window" lives here; the Codex docs above
+# carry no token figures). Codex-only models (e.g. gpt-5.3-codex-spark) have
+# no page here -- their context_window is omitted.
+OPENAI_MODEL_PAGE = "https://developers.openai.com/api/docs/models/{mid}"
 
 DEFAULT_MAX_TOKENS = 8192  # wrapper injection when a client omits max_tokens
 
@@ -56,6 +66,12 @@ def strip_tags(s):
 def money(v):
     """Render a USD-per-MTok value as a JSON float (5.0, 2.5, 3.125)."""
     return repr(float(v))
+
+
+def tokens(num, suffix):
+    """Normalize a docs token figure ("1M", "200k", "1.05M") to an int count."""
+    mult = {"k": 1_000, "m": 1_000_000}[suffix.lower()]
+    return int(round(float(num) * mult))
 
 
 # --------------------------------------------------------------------------
@@ -125,11 +141,24 @@ def parse_anthropic(overview_html, effort_html, pricing_html):
     adapt_row = adapt_row[:adapt_row.find("Comparative latency")]
     adapt = re.findall(r"Yes \(always on\)|Yes|No", strip_tags(adapt_row))
 
+    # The "Context window" row: "1M tokens" / "200k tokens" per model, same
+    # column order, up to the next row ("Max output"). Cell tooltips mention
+    # words/characters, so anchor on the literal "tokens" unit.
+    ctx_row = cur[cur.find("Context window"):]
+    ctx_row = ctx_row[:ctx_row.find("Max output")]
+    ctx_vals = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*([kKM])\s*tokens", ctx_row)
+    if len(ctx_vals) != len(model_ids):
+        print(f"warning: anthropic context-window row has {len(ctx_vals)} values "
+              f"for {len(model_ids)} models; omitting context_window",
+              file=sys.stderr)
+        ctx_vals = []
+    windows = [tokens(n, s) for n, s in ctx_vals]
+
     prices = anthropic_prices(pricing_html, model_ids)
 
     ladder = anthropic_ladder(effort_html)
     models = []
-    for mid, a in zip(model_ids, adapt):
+    for i, (mid, a) in enumerate(zip(model_ids, adapt)):
         if a == "No":
             # Adaptive thinking unsupported -> serve as a plain model.
             m = {
@@ -151,6 +180,8 @@ def parse_anthropic(overview_html, effort_html, pricing_html):
                 "reasoning": {"efforts": ["off"] + ladder, "default": "high", "mode": "default-on"},
                 "default_max_tokens": DEFAULT_MAX_TOKENS,
             }
+        if windows:
+            m["context_window"] = windows[i]
         if mid in prices:
             m["pricing"] = prices[mid]
         models.append(m)
@@ -160,6 +191,34 @@ def parse_anthropic(overview_html, effort_html, pricing_html):
 # --------------------------------------------------------------------------
 # OpenAI (ChatGPT / Codex sign-in)
 # --------------------------------------------------------------------------
+def openai_context_window(mid):
+    """The model's context window from its API docs page, or None.
+
+    Codex-only models (e.g. gpt-5.3-codex-spark) have no page there -- the URL
+    serves a generic shell with no specs -- so a miss is expected: warn and
+    omit rather than guess a number.
+    """
+    env_key = "SRC_OPENAI_MODEL_" + re.sub(r"[^A-Z0-9]", "_", mid.upper())
+    try:
+        page = fetch(OPENAI_MODEL_PAGE.format(mid=mid), env_key)
+    except Exception as e:  # noqa: BLE001 - any fetch failure means "unknown"
+        print(f"warning: {mid}: model page fetch failed ({e}); "
+              "omitting context_window", file=sys.stderr)
+        return None
+    clean = re.sub(r"\s+", " ", strip_tags(page))
+    # Spec formats seen in the wild: "1,050,000 context window" (plain count
+    # before the label), "Context window 1.05M", "1.05M context".
+    m = re.search(r"([0-9][0-9,]{3,})\s*context window", clean, re.I)
+    if m:
+        return int(m.group(1).replace(",", ""))
+    m = (re.search(r"Context window\s*([0-9]+(?:\.[0-9]+)?)\s*([kKM])", clean)
+         or re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([kKM])\s*(?:tokens?\s*)?context",
+                      clean, re.I))
+    if not m:
+        print(f"warning: {mid}: no context window on its model page; "
+              "omitting context_window", file=sys.stderr)
+        return None
+    return tokens(m.group(1), m.group(2))
 def openai_ladder(clean):
     """Shared reasoning ladder + default from the (single) level picker block.
 
@@ -228,6 +287,9 @@ def parse_openai(models_html, pricing_html):
             "aliases": [mid.replace("gpt-", "gpt")],  # deterministic dotless alias
             "reasoning": {"efforts": efforts, "default": default},
         }
+        ctx = openai_context_window(mid)
+        if ctx:
+            m["context_window"] = ctx
         if mid in prices:
             m["pricing"] = prices[mid]
         models.append(m)
@@ -265,19 +327,25 @@ def render(models):
                 if k in cost)
             cost_line = (f'      "pricing": {{ "currency": "USD", '
                          f'"unit": "per_million_tokens", {fields} }}')
+        ctx_line = None
+        if "context_window" in m:
+            ctx_line = f'      "context_window": {m["context_window"]}'
         if m["provider"] == "anthropic":
             lines.append(
                 f'      "reasoning": {{ "efforts": [{qlist(r["efforts"])}], '
                 f'"default": "{r["default"]}", "mode": "{r["mode"]}" }},')
             if cost_line:
                 lines.append(cost_line + ",")
+            if ctx_line:
+                lines.append(ctx_line + ",")
             lines.append(f'      "default_max_tokens": {m["default_max_tokens"]}')
         else:
+            tail = [l for l in (cost_line, ctx_line) if l]
             lines.append(
                 f'      "reasoning": {{ "efforts": [{qlist(r["efforts"])}], '
-                f'"default": "{r["default"]}" }}' + ("," if cost_line else ""))
-            if cost_line:
-                lines.append(cost_line)
+                f'"default": "{r["default"]}" }}' + ("," if tail else ""))
+            for i, l in enumerate(tail):
+                lines.append(l + ("," if i < len(tail) - 1 else ""))
         lines.append("    }" + comma)
         out.extend(lines)
     out.append("  ]")

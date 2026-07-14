@@ -56,6 +56,7 @@ type Model struct {
 	Aliases          []string  `json:"aliases,omitempty"`
 	Reasoning        Reasoning `json:"reasoning"`
 	Pricing          *Pricing  `json:"pricing,omitempty"`
+	ContextWindow    int       `json:"context_window,omitempty"`
 	DefaultMaxTokens int       `json:"default_max_tokens,omitempty"`
 }
 
@@ -119,6 +120,9 @@ func Parse(raw []byte) (*Registry, error) {
 		}
 		if m.UpstreamID == "" {
 			m.UpstreamID = m.ID
+		}
+		if m.ContextWindow < 0 {
+			return nil, fmt.Errorf("model %q has negative context_window %d", m.ID, m.ContextWindow)
 		}
 		idx := len(reg.models)
 		reg.models = append(reg.models, m)
