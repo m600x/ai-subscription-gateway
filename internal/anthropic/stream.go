@@ -24,6 +24,12 @@ func StreamResponse(r io.Reader, sink provider.ChunkSink, id, model string, cfg 
 	finish := "stop"
 	var usage Usage
 
+	// toolIdx maps an SSE content-block index to its OpenAI tool_calls index.
+	// Only client tool_use blocks register here; server_tool_use (web search)
+	// stays unmapped so its input fragments never leak as client tool calls.
+	toolIdx := map[int]int{}
+	nextToolIdx := 0
+
 	// mergeUsage keeps the most complete counts seen so far: message_start
 	// carries input/cache tokens, the final message_delta carries the
 	// authoritative output tokens (incl. thinking breakdown).
@@ -99,12 +105,36 @@ func StreamResponse(r io.Reader, sink provider.ChunkSink, id, model string, cfg 
 				return err
 			}
 		case "content_block_start":
-			if cfg.EnableWebSearch && ev.ContentBlock != nil && ev.ContentBlock.Type == "server_tool_use" {
-				_ = sendRole()
-				// Italic status on its own paragraph: the surrounding blank
-				// lines keep the model's answer out of the status styling
-				// (a "> " blockquote would swallow the following text).
-				_ = sink.Send(mkChunk(&openai.Delta{Content: "\n\n*searching the web…*\n\n"}, nil))
+			if ev.ContentBlock == nil {
+				continue
+			}
+			switch ev.ContentBlock.Type {
+			case "server_tool_use":
+				if cfg.EnableWebSearch {
+					_ = sendRole()
+					// Italic status on its own paragraph: the surrounding blank
+					// lines keep the model's answer out of the status styling
+					// (a "> " blockquote would swallow the following text).
+					_ = sink.Send(mkChunk(&openai.Delta{Content: "\n\n*searching the web…*\n\n"}, nil))
+				}
+			case "tool_use":
+				idx := nextToolIdx
+				nextToolIdx++
+				toolIdx[ev.Index] = idx
+				if err := sendRole(); err != nil {
+					return err
+				}
+				// First fragment carries index+id+type+name; the arguments
+				// stream separately as input_json_delta fragments below.
+				delta := &openai.Delta{ToolCalls: []openai.ToolCallDelta{{
+					Index:    idx,
+					ID:       ev.ContentBlock.ID,
+					Type:     "function",
+					Function: openai.ToolCallFunction{Name: ev.ContentBlock.Name},
+				}}}
+				if err := sink.Send(mkChunk(delta, nil)); err != nil {
+					return err
+				}
 			}
 		case "content_block_delta":
 			if ev.Delta == nil {
@@ -128,6 +158,18 @@ func StreamResponse(r io.Reader, sink provider.ChunkSink, id, model string, cfg 
 					if err := sink.Send(mkChunk(&openai.Delta{ReasoningContent: ev.Delta.Thinking}, nil)); err != nil {
 						return err
 					}
+				}
+			case "input_json_delta":
+				idx, ok := toolIdx[ev.Index]
+				if !ok || ev.Delta.PartialJSON == "" {
+					continue
+				}
+				delta := &openai.Delta{ToolCalls: []openai.ToolCallDelta{{
+					Index:    idx,
+					Function: openai.ToolCallFunction{Arguments: ev.Delta.PartialJSON},
+				}}}
+				if err := sink.Send(mkChunk(delta, nil)); err != nil {
+					return err
 				}
 			}
 		case "message_delta":

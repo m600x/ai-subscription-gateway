@@ -40,7 +40,7 @@ func TestCreateMessageSendsHeadersAndParses(t *testing.T) {
 	c := New(testConfig(srv.URL))
 	resp, err := c.CreateMessage(context.Background(), MessagesRequest{
 		Model: "claude-sonnet-5", MaxTokens: 16,
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestCreateMessageTypedError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(testConfig(srv.URL))
-	_, err := c.CreateMessage(context.Background(), MessagesRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	_, err := c.CreateMessage(context.Background(), MessagesRequest{Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -101,7 +101,7 @@ func TestRetryOn500ThenSuccess(t *testing.T) {
 	cfg := testConfig(srv.URL)
 	cfg.MaxRetries = 3
 	c := New(cfg)
-	resp, err := c.CreateMessage(context.Background(), MessagesRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	resp, err := c.CreateMessage(context.Background(), MessagesRequest{Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestStreamMessageReturnsBody(t *testing.T) {
 	defer srv.Close()
 
 	c := New(testConfig(srv.URL))
-	body, err := c.StreamMessage(context.Background(), MessagesRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	body, err := c.StreamMessage(context.Background(), MessagesRequest{Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}

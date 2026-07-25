@@ -110,6 +110,104 @@ func TestStreamResponseFinalChunkCarriesUsage(t *testing.T) {
 	}
 }
 
+func TestStreamResponseToolCall(t *testing.T) {
+	input := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"m"}}`,
+		``,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}`,
+		``,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Checking."}}`,
+		``,
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather"}}`,
+		``,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}`,
+		``,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"Paris\"}"}}`,
+		``,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}`,
+		``,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	var sink captureSink
+	if err := StreamResponse(strings.NewReader(input), &sink, "id", "m", &config.Config{}); err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+	got := sink.String()
+	for _, want := range []string{
+		`"id":"toolu_1"`,
+		`"type":"function"`,
+		`"name":"get_weather"`,
+		`"arguments":"{\"city\":"`,
+		`"arguments":"\"Paris\"}"`,
+		`"finish_reason":"tool_calls"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q\n--- output ---\n%s", want, got)
+		}
+	}
+}
+
+func TestStreamResponseParallelToolCallIndexes(t *testing.T) {
+	input := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"m"}}`,
+		``,
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"a"}}`,
+		``,
+		`data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_2","name":"b"}}`,
+		``,
+		`data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+		``,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}`,
+		``,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	var sink captureSink
+	if err := StreamResponse(strings.NewReader(input), &sink, "id", "m", &config.Config{}); err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+	got := sink.String()
+	// SSE block indexes 1,2 must map to OpenAI tool_calls indexes 0,1, and
+	// argument fragments must carry the mapped index.
+	if !strings.Contains(got, `"index":0,"id":"toolu_1"`) || !strings.Contains(got, `"index":1,"id":"toolu_2"`) {
+		t.Errorf("tool index mapping wrong\n%s", got)
+	}
+	if !strings.Contains(got, `"index":1,"function":{"name":"","arguments":"{}"}`) {
+		t.Errorf("argument fragment must carry the mapped index\n%s", got)
+	}
+}
+
+func TestStreamResponseServerToolUseNotLeakedAsToolCall(t *testing.T) {
+	input := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"m"}}`,
+		``,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search"}}`,
+		``,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"go\"}"}}`,
+		``,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}}`,
+		``,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	var sink captureSink
+	cfg := &config.Config{EnableWebSearch: true}
+	if err := StreamResponse(strings.NewReader(input), &sink, "id", "m", cfg); err != nil {
+		t.Fatalf("StreamResponse: %v", err)
+	}
+	got := sink.String()
+	if strings.Contains(got, "tool_calls") {
+		t.Errorf("server_tool_use must never surface as client tool_calls\n%s", got)
+	}
+	if !strings.Contains(got, "searching the web") {
+		t.Errorf("web search status line missing\n%s", got)
+	}
+}
+
 func TestStreamResponseLengthFinish(t *testing.T) {
 	input := strings.Join([]string{
 		`data: {"type":"message_start","message":{"id":"m"}}`,

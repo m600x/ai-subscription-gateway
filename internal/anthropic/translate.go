@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -32,8 +33,19 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, m registry.Model, cf
 			if strings.TrimSpace(mm.Content.String()) != "" {
 				system = append(system, SystemBlock{Type: "text", Text: mm.Content.String()})
 			}
+		case "tool":
+			// Tool output continues the exchange as a tool_result block in a
+			// user turn; coalesce groups consecutive results into one turn.
+			if mm.ToolCallID == "" {
+				continue
+			}
+			msgs = append(msgs, Message{Role: "user", Content: []ContentBlock{{
+				Type: "tool_result", ToolUseID: mm.ToolCallID, Content: mm.Content.String(),
+			}}})
 		case "user", "assistant":
-			msgs = append(msgs, Message{Role: mm.Role, Content: mm.Content.String()})
+			if blocks := messageBlocks(mm); len(blocks) > 0 {
+				msgs = append(msgs, Message{Role: mm.Role, Content: blocks})
+			}
 		}
 	}
 	msgs = coalesce(msgs)
@@ -55,6 +67,15 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, m registry.Model, cf
 		System:    system,
 		Messages:  msgs,
 		Stream:    req.Stream,
+	}
+
+	clientTools := buildTools(req.Tools)
+	out.Tools = clientTools
+	if cfg.EnableWebSearch {
+		out.Tools = append(out.Tools, Tool{Type: "web_search_20250305", Name: "web_search"})
+	}
+	if len(clientTools) > 0 {
+		out.ToolChoice = mapToolChoice(req.ToolChoice, req.ParallelToolCalls)
 	}
 
 	thinking := false
@@ -86,11 +107,94 @@ func BuildMessagesRequest(req openai.ChatCompletionRequest, m registry.Model, cf
 		out.TopP = req.TopP
 	}
 
-	if cfg.EnableWebSearch {
-		out.Tools = []Tool{{Type: "web_search_20250305", Name: "web_search"}}
-	}
-
 	return out
+}
+
+// messageBlocks converts a user/assistant message into content blocks: the
+// text (if any) first, then the assistant's tool calls as tool_use blocks.
+func messageBlocks(mm openai.ChatMessage) []ContentBlock {
+	var blocks []ContentBlock
+	if txt := mm.Content.String(); txt != "" {
+		blocks = append(blocks, ContentBlock{Type: "text", Text: txt})
+	}
+	if mm.Role == "assistant" {
+		for _, tc := range mm.ToolCalls {
+			if tc.Type != "" && tc.Type != "function" {
+				continue
+			}
+			blocks = append(blocks, ContentBlock{
+				Type:  "tool_use",
+				ID:    tc.ID,
+				Name:  tc.Function.Name,
+				Input: toolInput(tc.Function.Arguments),
+			})
+		}
+	}
+	return blocks
+}
+
+// toolInput parses an OpenAI arguments string into the JSON object tool_use
+// requires; anything unparseable degrades to {} rather than an error.
+func toolInput(args string) json.RawMessage {
+	s := strings.TrimSpace(args)
+	var obj map[string]json.RawMessage
+	if s == "" || json.Unmarshal([]byte(s), &obj) != nil {
+		return json.RawMessage(`{}`)
+	}
+	return json.RawMessage(s)
+}
+
+// buildTools maps client function tools onto Anthropic tool definitions.
+func buildTools(tools []openai.Tool) []Tool {
+	var out []Tool
+	for _, t := range tools {
+		if t.Type != "function" || t.Function.Name == "" {
+			continue
+		}
+		schema := t.Function.Parameters
+		if len(schema) == 0 {
+			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		out = append(out, Tool{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			InputSchema: schema,
+		})
+	}
+	return out
+}
+
+// mapToolChoice converts the OpenAI tool_choice (string or object form) plus
+// parallel_tool_calls into the Anthropic tool_choice object. Returns nil when
+// nothing needs to be sent (auto with parallel calls allowed).
+func mapToolChoice(raw json.RawMessage, parallel *bool) *ToolChoice {
+	tc := &ToolChoice{Type: "auto"}
+	if parallel != nil && !*parallel {
+		tc.DisableParallelToolUse = true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		switch s {
+		case "none":
+			tc.Type = "none"
+		case "required":
+			tc.Type = "any"
+		}
+	} else if len(raw) > 0 {
+		var obj struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		}
+		if json.Unmarshal(raw, &obj) == nil && obj.Function.Name != "" {
+			tc.Type = "tool"
+			tc.Name = obj.Function.Name
+		}
+	}
+	if tc.Type == "auto" && !tc.DisableParallelToolUse {
+		return nil
+	}
+	return tc
 }
 
 // normalizeEffort maps a reasoning_effort value onto the Anthropic effort
@@ -132,10 +236,38 @@ func coalesce(msgs []Message) []Message {
 	out := make([]Message, 0, len(msgs))
 	for _, m := range msgs {
 		if n := len(out); n > 0 && out[n-1].Role == m.Role {
-			out[n-1].Content = out[n-1].Content + "\n\n" + m.Content
+			out[n-1].Content = mergeBlocks(out[n-1].Content, m.Content)
 			continue
 		}
 		out = append(out, m)
+	}
+	return out
+}
+
+// mergeBlocks combines the blocks of two same-role turns. tool_result blocks
+// move to the front (the API requires results to lead the user turn that
+// answers a tool_use) and blocks that end up as adjacent text merge with a
+// paragraph break, preserving the pre-block wire shape for plain text.
+func mergeBlocks(a, b []ContentBlock) []ContentBlock {
+	all := make([]ContentBlock, 0, len(a)+len(b))
+	all = append(all, a...)
+	all = append(all, b...)
+
+	out := make([]ContentBlock, 0, len(all))
+	for _, blk := range all {
+		if blk.Type == "tool_result" {
+			out = append(out, blk)
+		}
+	}
+	for _, blk := range all {
+		if blk.Type == "tool_result" {
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1].Type == "text" && blk.Type == "text" {
+			out[n-1].Text += "\n\n" + blk.Text
+			continue
+		}
+		out = append(out, blk)
 	}
 	return out
 }
@@ -144,6 +276,8 @@ func mapStopReason(r string) string {
 	switch r {
 	case "max_tokens":
 		return "length"
+	case "tool_use":
+		return "tool_calls"
 	default:
 		return "stop"
 	}
@@ -174,9 +308,21 @@ func BuildUsage(u Usage) *openai.Usage {
 // chat.completion.
 func BuildChatCompletion(resp *MessagesResponse, id, model string) openai.ChatCompletion {
 	var sb strings.Builder
+	var toolCalls []openai.ToolCall
 	for _, c := range resp.Content {
-		if c.Type == "text" {
+		switch c.Type {
+		case "text":
 			sb.WriteString(c.Text)
+		case "tool_use":
+			args := "{}"
+			if len(c.Input) > 0 {
+				args = string(c.Input)
+			}
+			toolCalls = append(toolCalls, openai.ToolCall{
+				ID:       c.ID,
+				Type:     "function",
+				Function: openai.ToolCallFunction{Name: c.Name, Arguments: args},
+			})
 		}
 	}
 	finish := mapStopReason(resp.StopReason)
@@ -187,7 +333,7 @@ func BuildChatCompletion(resp *MessagesResponse, id, model string) openai.ChatCo
 		Model:   model,
 		Choices: []openai.Choice{{
 			Index:        0,
-			Message:      &openai.RespMessage{Role: "assistant", Content: sb.String()},
+			Message:      &openai.RespMessage{Role: "assistant", Content: sb.String(), ToolCalls: toolCalls},
 			FinishReason: &finish,
 		}},
 		Usage: BuildUsage(resp.Usage),

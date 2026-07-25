@@ -4,16 +4,20 @@
 // exposes streaming and non-streaming calls.
 package anthropic
 
+import "encoding/json"
+
 // SystemBlock is one entry in the Messages API `system` array.
 type SystemBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
 
-// Message is a single conversation turn (text-only in v1).
+// Message is a single conversation turn. Content always uses the
+// array-of-blocks form (the API also accepts a plain string; one marshal path
+// is simpler and tool_use/tool_result require blocks anyway).
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string         `json:"role"`
+	Content []ContentBlock `json:"content"`
 }
 
 // Thinking configures thinking mode. Current models use adaptive thinking
@@ -29,10 +33,22 @@ type OutputConfig struct {
 	Effort string `json:"effort,omitempty"`
 }
 
-// Tool declares a server-side tool (e.g. web_search).
+// Tool declares either a server-side tool (Type+Name, e.g. web_search) or a
+// client function tool (Name+Description+InputSchema, no Type).
 type Tool struct {
-	Type string `json:"type"`
-	Name string `json:"name"`
+	Type        string          `json:"type,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+
+// ToolChoice steers tool selection: auto|any|tool|none, with Name naming the
+// forced tool for type "tool". DisableParallelToolUse maps from OpenAI's
+// parallel_tool_calls=false.
+type ToolChoice struct {
+	Type                   string `json:"type"`
+	Name                   string `json:"name,omitempty"`
+	DisableParallelToolUse bool   `json:"disable_parallel_tool_use,omitempty"`
 }
 
 // MessagesRequest is the POST /v1/messages body.
@@ -45,6 +61,7 @@ type MessagesRequest struct {
 	Thinking     *Thinking     `json:"thinking,omitempty"`
 	OutputConfig *OutputConfig `json:"output_config,omitempty"`
 	Tools        []Tool        `json:"tools,omitempty"`
+	ToolChoice   *ToolChoice   `json:"tool_choice,omitempty"`
 	Temperature  *float64      `json:"temperature,omitempty"`
 	TopP         *float64      `json:"top_p,omitempty"`
 }
@@ -63,12 +80,20 @@ type Usage struct {
 	OutputTokensDetails      *OutputTokensDetails `json:"output_tokens_details,omitempty"`
 }
 
-// ContentBlock is one block of a non-streaming response (or a stream block header).
+// ContentBlock is one content block: a request message block, a block of a
+// non-streaming response, or a stream block header. Fields are a union across
+// block types (text, thinking, tool_use, tool_result, server_tool_use);
+// unused ones stay empty. ToolUseID/Content belong to tool_result blocks
+// (request-only); ID/Input belong to tool_use blocks.
 type ContentBlock struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	Thinking string `json:"thinking,omitempty"`
-	Name     string `json:"name,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
 }
 
 // MessagesResponse is the non-streaming response body.
@@ -81,12 +106,14 @@ type MessagesResponse struct {
 	Usage      Usage          `json:"usage"`
 }
 
-// StreamDelta is the `delta` field across SSE event types.
+// StreamDelta is the `delta` field across SSE event types. PartialJSON
+// carries input_json_delta fragments of a tool_use block's input.
 type StreamDelta struct {
-	Type       string `json:"type"`
-	Text       string `json:"text,omitempty"`
-	Thinking   string `json:"thinking,omitempty"`
-	StopReason string `json:"stop_reason,omitempty"`
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	Thinking    string `json:"thinking,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
 }
 
 // StreamEvent is a decoded SSE `data:` payload from the Messages API.

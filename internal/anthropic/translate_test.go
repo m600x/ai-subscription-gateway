@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -72,8 +73,8 @@ func TestCoalesceConsecutiveRoles(t *testing.T) {
 	if len(mr.Messages) != 2 {
 		t.Fatalf("want 2 coalesced messages, got %d", len(mr.Messages))
 	}
-	if mr.Messages[0].Content != "a\n\nb" {
-		t.Errorf("consecutive user messages not merged; got %q", mr.Messages[0].Content)
+	if len(mr.Messages[0].Content) != 1 || mr.Messages[0].Content[0].Text != "a\n\nb" {
+		t.Errorf("consecutive user messages not merged into one text block; got %+v", mr.Messages[0].Content)
 	}
 }
 
@@ -236,5 +237,172 @@ func TestWebSearchToolAddedWhenEnabled(t *testing.T) {
 	mr := BuildMessagesRequest(req, modelSonnet(), cfg)
 	if len(mr.Tools) != 1 || mr.Tools[0].Name != "web_search" {
 		t.Errorf("web_search tool not added; got %+v", mr.Tools)
+	}
+	if mr.ToolChoice != nil {
+		t.Errorf("web_search alone must not emit a tool_choice; got %+v", mr.ToolChoice)
+	}
+}
+
+func TestClientToolsForwarded(t *testing.T) {
+	cfg := testCfg()
+	cfg.EnableWebSearch = true
+	req := openai.ChatCompletionRequest{
+		Messages: []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}},
+		Tools: []openai.Tool{
+			{Type: "function", Function: openai.FunctionDef{Name: "get_weather", Description: "Weather lookup",
+				Parameters: json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`)}},
+			{Type: "function", Function: openai.FunctionDef{Name: "no_params"}},
+			{Type: "web_search_preview"}, // non-function entry: skipped
+		},
+	}
+	mr := BuildMessagesRequest(req, modelSonnet(), cfg)
+	if len(mr.Tools) != 3 {
+		t.Fatalf("want 2 client tools + web_search, got %+v", mr.Tools)
+	}
+	if mr.Tools[0].Name != "get_weather" || mr.Tools[0].Description != "Weather lookup" || mr.Tools[0].Type != "" {
+		t.Errorf("client tool mangled: %+v", mr.Tools[0])
+	}
+	if !strings.Contains(string(mr.Tools[0].InputSchema), `"city"`) {
+		t.Errorf("input_schema not forwarded: %s", mr.Tools[0].InputSchema)
+	}
+	if string(mr.Tools[1].InputSchema) != `{"type":"object","properties":{}}` {
+		t.Errorf("missing parameters must default to an empty object schema: %s", mr.Tools[1].InputSchema)
+	}
+	if mr.Tools[2].Name != "web_search" || mr.Tools[2].Type == "" {
+		t.Errorf("web_search server tool must be appended after client tools: %+v", mr.Tools[2])
+	}
+}
+
+func TestToolChoiceMapping(t *testing.T) {
+	noParallel := false
+	cases := []struct {
+		name     string
+		raw      string
+		parallel *bool
+		want     *ToolChoice
+	}{
+		{"unset", "", nil, nil},
+		{"auto", `"auto"`, nil, nil},
+		{"none", `"none"`, nil, &ToolChoice{Type: "none"}},
+		{"required", `"required"`, nil, &ToolChoice{Type: "any"}},
+		{"named", `{"type":"function","function":{"name":"get_weather"}}`, nil, &ToolChoice{Type: "tool", Name: "get_weather"}},
+		{"noparallel", `"auto"`, &noParallel, &ToolChoice{Type: "auto", DisableParallelToolUse: true}},
+	}
+	for _, c := range cases {
+		var raw json.RawMessage
+		if c.raw != "" {
+			raw = json.RawMessage(c.raw)
+		}
+		got := mapToolChoice(raw, c.parallel)
+		if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
+			t.Errorf("%s: got %+v want %+v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAssistantToolCallsBecomeToolUse(t *testing.T) {
+	req := openai.ChatCompletionRequest{
+		Messages: []openai.ChatMessage{
+			{Role: "user", Content: openai.Content{Text: "weather?"}},
+			{Role: "assistant", Content: openai.Content{Text: "Let me check."}, ToolCalls: []openai.ToolCall{
+				{ID: "call_1", Type: "function", Function: openai.ToolCallFunction{Name: "get_weather", Arguments: `{"city":"Paris"}`}},
+				{ID: "call_2", Type: "function", Function: openai.ToolCallFunction{Name: "get_time", Arguments: `not json`}},
+			}},
+		},
+	}
+	mr := BuildMessagesRequest(req, modelSonnet(), testCfg())
+	if len(mr.Messages) != 2 {
+		t.Fatalf("messages = %+v", mr.Messages)
+	}
+	blocks := mr.Messages[1].Content
+	if len(blocks) != 3 || blocks[0].Type != "text" || blocks[1].Type != "tool_use" || blocks[2].Type != "tool_use" {
+		t.Fatalf("assistant blocks = %+v", blocks)
+	}
+	if blocks[1].ID != "call_1" || blocks[1].Name != "get_weather" || string(blocks[1].Input) != `{"city":"Paris"}` {
+		t.Errorf("tool_use block = %+v", blocks[1])
+	}
+	if string(blocks[2].Input) != `{}` {
+		t.Errorf("unparseable arguments must degrade to {}; got %s", blocks[2].Input)
+	}
+}
+
+func TestToolResultsGroupIntoOneUserTurn(t *testing.T) {
+	req := openai.ChatCompletionRequest{
+		Messages: []openai.ChatMessage{
+			{Role: "user", Content: openai.Content{Text: "weather?"}},
+			{Role: "assistant", ToolCalls: []openai.ToolCall{
+				{ID: "call_1", Type: "function", Function: openai.ToolCallFunction{Name: "get_weather", Arguments: `{}`}},
+				{ID: "call_2", Type: "function", Function: openai.ToolCallFunction{Name: "get_time", Arguments: `{}`}},
+			}},
+			{Role: "tool", ToolCallID: "call_1", Content: openai.Content{Text: "sunny"}},
+			{Role: "tool", ToolCallID: "call_2", Content: openai.Content{Text: "noon"}},
+			{Role: "user", Content: openai.Content{Text: "thanks, summarize"}},
+		},
+	}
+	mr := BuildMessagesRequest(req, modelSonnet(), testCfg())
+	if len(mr.Messages) != 3 {
+		t.Fatalf("want user/assistant/user, got %d: %+v", len(mr.Messages), mr.Messages)
+	}
+	if got := mr.Messages[1].Content; len(got) != 2 || got[0].Type != "tool_use" || got[1].Type != "tool_use" {
+		t.Fatalf("assistant turn = %+v", got)
+	}
+	last := mr.Messages[2]
+	if last.Role != "user" || len(last.Content) != 3 {
+		t.Fatalf("merged user turn = %+v", last)
+	}
+	if last.Content[0].Type != "tool_result" || last.Content[0].ToolUseID != "call_1" || last.Content[0].Content != "sunny" {
+		t.Errorf("first tool_result = %+v", last.Content[0])
+	}
+	if last.Content[1].Type != "tool_result" || last.Content[1].ToolUseID != "call_2" {
+		t.Errorf("second tool_result = %+v", last.Content[1])
+	}
+	if last.Content[2].Type != "text" || last.Content[2].Text != "thanks, summarize" {
+		t.Errorf("text must trail the tool_result blocks; got %+v", last.Content[2])
+	}
+}
+
+func TestForcedToolChoiceKeepsThinking(t *testing.T) {
+	// Verified live 2026-07-25: adaptive thinking coexists with tool_choice
+	// any/tool (the old budget_tokens-era incompatibility does not apply).
+	temp := 0.5
+	req := openai.ChatCompletionRequest{
+		ReasoningEffort: "high",
+		Temperature:     &temp,
+		ToolChoice:      json.RawMessage(`"required"`),
+		Tools:           []openai.Tool{{Type: "function", Function: openai.FunctionDef{Name: "get_weather"}}},
+		Messages:        []openai.ChatMessage{{Role: "user", Content: openai.Content{Text: "hi"}}},
+	}
+	mr := BuildMessagesRequest(req, modelSonnet(), testCfg())
+	if mr.ToolChoice == nil || mr.ToolChoice.Type != "any" {
+		t.Fatalf("tool_choice = %+v, want any", mr.ToolChoice)
+	}
+	if mr.Thinking == nil || mr.Thinking.Type != "adaptive" || mr.OutputConfig == nil || mr.OutputConfig.Effort != "high" {
+		t.Errorf("forced tool choice must keep thinking; got %+v %+v", mr.Thinking, mr.OutputConfig)
+	}
+	if mr.Temperature != nil {
+		t.Error("temperature must still be dropped while thinking is active")
+	}
+}
+
+func TestBuildChatCompletionToolUse(t *testing.T) {
+	resp := &MessagesResponse{
+		Content: []ContentBlock{
+			{Type: "text", Text: "Checking."},
+			{Type: "tool_use", ID: "toolu_1", Name: "get_weather", Input: json.RawMessage(`{"city":"Paris"}`)},
+		},
+		StopReason: "tool_use",
+		Usage:      Usage{InputTokens: 10, OutputTokens: 5},
+	}
+	cc := BuildChatCompletion(resp, "chatcmpl-1", "claude-sonnet-5")
+	msg := cc.Choices[0].Message
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].ID != "toolu_1" || msg.ToolCalls[0].Function.Name != "get_weather" ||
+		msg.ToolCalls[0].Function.Arguments != `{"city":"Paris"}` {
+		t.Errorf("tool_calls = %+v", msg.ToolCalls)
+	}
+	if fr := cc.Choices[0].FinishReason; fr == nil || *fr != "tool_calls" {
+		t.Errorf("finish_reason = %v, want tool_calls", fr)
+	}
+	if msg.Content != "Checking." {
+		t.Errorf("content = %q", msg.Content)
 	}
 }

@@ -122,11 +122,9 @@ Each `/v1/models` entry carries two vendor extensions mirroring `models.json` �
 
 ## OpenAI-schema features
 
-Both providers surface OpenAI-standard **token usage** (`usage`, including cached-prompt and reasoning-token breakdowns) and stream reasoning as `reasoning_content`. The Codex provider additionally supports:
+Both providers surface OpenAI-standard **token usage** (`usage`, including cached-prompt and reasoning-token breakdowns), stream reasoning as `reasoning_content`, honor **`reasoning_effort`** (mapped onto the model's effort ladder per `models.json`), and support **function/tool calling** — client `tools`/`tool_choice`/`parallel_tool_calls` are forwarded and `tool_calls` come back (streamed and non-streamed). The Codex provider additionally supports:
 
-- **Function/tool calling** — client `tools` are forwarded and `tool_calls` come back (streamed and non-streamed).
 - **Image inputs** — `image_url` content parts are forwarded to the Responses API.
-- **`reasoning_effort`** mapped onto the model's effort ladder (per `models.json`).
 
 ## Reasoning controls
 
@@ -278,7 +276,7 @@ CI (`.github/workflows/ci.yml`) runs one sequential pipeline — **lint → test
 
 ## Limitations
 
-- Text + images in, text/tool-calls out. Image inputs are forwarded on the Codex provider; the Claude provider is text-only.
+- Text + images in, text/tool-calls out. Image inputs are forwarded on the Codex provider only; the Claude provider accepts text and tool results but drops image parts.
 - Single-user by design: a subscription OAuth token is for your own use under each vendor's terms. Do not put it in front of other people's traffic.
 
 ## Licence
