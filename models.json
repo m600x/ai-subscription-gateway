@@ -10,9 +10,9 @@
       "default_max_tokens": 8192
     },
     {
-      "id": "claude-opus-4-8",
+      "id": "claude-opus-5",
       "provider": "anthropic",
-      "upstream_id": "claude-opus-4-8",
+      "upstream_id": "claude-opus-5",
       "reasoning": { "efforts": ["off", "low", "medium", "high", "xhigh", "max"], "default": "high", "mode": "default-on" },
       "pricing": { "currency": "USD", "unit": "per_million_tokens", "input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25 },
       "context_window": 1000000,
