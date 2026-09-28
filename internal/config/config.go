@@ -98,7 +98,7 @@ func Load() (*Config, error) {
 		AnthropicVersion:  envStr("ANTHROPIC_VERSION", "2023-06-01"),
 		AnthropicBeta:     envStr("ANTHROPIC_BETA", "oauth-2025-04-20"),
 		SpoofSystemPrompt: envStr("SPOOF_SYSTEM_PROMPT", "You are Claude Code, Anthropic's official CLI for Claude."),
-		UserAgent:         envStr("USER_AGENT", "claude-cli/1.0.0 (external, cli)"),
+		UserAgent:         envStr("USER_AGENT", "claude-cli/2.1.280 (external, cli)"),
 		EnableWebSearch:   envBool("ENABLE_WEB_SEARCH", false),
 		ThinkingDisplay:   envStr("THINKING_DISPLAY", "summarized"),
 

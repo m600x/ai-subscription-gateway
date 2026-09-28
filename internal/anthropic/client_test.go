@@ -20,7 +20,7 @@ func testConfig(url string) *config.Config {
 		AnthropicBaseURL: url,
 		AnthropicVersion: "2023-06-01",
 		AnthropicBeta:    "oauth-2025-04-20",
-		UserAgent:        "claude-cli/1.0.0 (external, cli)",
+		UserAgent:        "claude-cli/2.1.280 (external, cli)",
 		RequestTimeout:   5 * time.Second,
 		MaxRetries:       2,
 	}
@@ -54,7 +54,7 @@ func TestCreateMessageSendsHeadersAndParses(t *testing.T) {
 	if beta != "oauth-2025-04-20" {
 		t.Errorf("anthropic-beta = %q", beta)
 	}
-	if ua != "claude-cli/1.0.0 (external, cli)" {
+	if ua != "claude-cli/2.1.280 (external, cli)" {
 		t.Errorf("User-Agent = %q", ua)
 	}
 	if len(resp.Content) != 1 || resp.Content[0].Text != "hello" {
